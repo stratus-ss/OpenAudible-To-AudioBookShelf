@@ -1,6 +1,6 @@
 import tempfile
 import logging
-from pathlib import Path, PosixPath
+from pathlib import Path
 import sys
 from collections.abc import Generator
 

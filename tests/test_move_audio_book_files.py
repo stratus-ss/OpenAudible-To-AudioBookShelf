@@ -1,222 +1,8 @@
-# import pytest
-# import os
-# import shutil
-# import json
-# from openaudible_to_ab import (
-#     move_audio_book_files,
-#     sanitize_name,
-#     make_directory_structure,
-#     process_open_audible_book_json,
-#     process_libation_book_json,
-# )
-# from datetime import datetime, timedelta, timezone
-
-
-# @pytest.fixture
-# def test_data():
-#     books_json = [
-#         {
-#             "asin": "B07M82V9CG",
-#             "author": "Craig Smith",
-#             "summary": "A very interesting book",
-#             "filename": "test_book1",
-#             "purchase_date": "2024-07-24",
-#             "series_name": "Test Series",
-#             "title_short": "Test Book 1",
-#             "title": "Test Book 1: The Beginning",
-#             "series_sequence": 1,
-#         },
-#         {
-#             "asin": "B08N57W3PZ",
-#             "author": "Jane Doe",
-#             "summary": "Another captivating novel",
-#             "filename": "test_book2",
-#             "purchase_date": (datetime.now(timezone.utc)).strftime("%Y-%m-%d"),
-#             "series_name": "",
-#             "title_short": "Test Book 2",
-#             "title": "Test Book 2: The Sequel",
-#             "series_sequence": None,
-#         },
-#     ]
-
-#     libation_books_json = [
-#         {
-#             "Account": "account",
-#             "AudibleProductId": "B07M82V9CG",
-#             "AudioFormat": "format",
-#             "AuthorNames": "Craig Smith",
-#             "BookStatus": "status",
-#             "CategoriesNames": "categories",
-#             "ContentType": "type",
-#             "DateAdded": "2024-07-24T12:00:00.0",
-#             "DatePublished": "date",
-#             "Description": "A very interesting book",
-#             "HasPdf": True,
-#             "Language": "language",
-#             "LengthInMinutes": 120,
-#             "Locale": "locale",
-#             "NarratorNames": "narrator",
-#             "Publisher": "publisher",
-#             "SeriesNames": "Test Series",
-#             "SeriesOrder": "1 of 3",
-#             "Subtitle": "The Beginning",
-#             "Title": "Test Book 1",
-#         },
-#         {
-#             "Account": "account",
-#             "AudibleProductId": "B08N57W3PZ",
-#             "AudioFormat": "format",
-#             "AuthorNames": "Jane Doe",
-#             "BookStatus": "status",
-#             "CategoriesNames": "categories",
-#             "ContentType": "type",
-#             "DateAdded": "2024-07-25T12:00:00.0",
-#             "DatePublished": "date",
-#             "Description": "Another captivating novel",
-#             "HasPdf": False,
-#             "Language": "language",
-#             "LengthInMinutes": 150,
-#             "Locale": "locale",
-#             "NarratorNames": "narrator",
-#             "Publisher": "publisher",
-#             "SeriesNames": None,
-#             "SeriesOrder": None,
-#             "Subtitle": "The Sequel",
-#             "Title": "Test Book 2",
-#         },
-#     ]
-#     return books_json, libation_books_json
-
-
-# @pytest.fixture
-# def test_environment():
-#     source_dir = "test_source"
-#     destination_dir = "test_destination"
-#     audio_file_extension = ".m4b"
-#     books_json_path = "test_books.json"
-#     log_file_path = "test_log.txt"
-#     purchased_how_long_ago = 7
-
-#     os.makedirs(source_dir, exist_ok=True)
-#     os.makedirs(destination_dir, exist_ok=True)
-
-#     yield source_dir, destination_dir, audio_file_extension, books_json_path, log_file_path, purchased_how_long_ago
-
-#     shutil.rmtree(source_dir, ignore_errors=True)
-#     shutil.rmtree(destination_dir, ignore_errors=True)
-#     if os.path.exists(log_file_path):
-#         os.remove(log_file_path)
-
-
-# @pytest.mark.parametrize("download_program", ["OpenAudible", "Libation"])
-# def test_move_audio_book_files_empty_json(mocker, test_environment, download_program):
-#     (
-#         source_dir,
-#         destination_dir,
-#         audio_file_extension,
-#         books_json_path,
-#         log_file_path,
-#         purchased_how_long_ago,
-#     ) = test_environment
-
-#     mocker.patch("builtins.open", mocker.mock_open(read_data=json.dumps([])))
-#     mocker.patch("os.path.exists", return_value=True)
-#     mock_move = mocker.patch("shutil.move")
-#     with open(log_file_path, "w") as log_file:
-#         book_list = move_audio_book_files(
-#             audio_file_extension,
-#             books_json_path,
-#             destination_dir,
-#             download_program,
-#             False,
-#             log_file,
-#             purchased_how_long_ago,
-#             source_dir,
-#         )
-#     assert book_list == []
-#     mock_move.assert_not_called()
-
-
-# def test_move_audio_book_files_invalid_json(mocker, test_environment):
-#     (
-#         source_dir,
-#         destination_dir,
-#         audio_file_extension,
-#         books_json_path,
-#         log_file_path,
-#         purchased_how_long_ago,
-#     ) = test_environment
-#     with mocker.patch("builtins.open", mocker.mock_open(read_data="invalid json")):
-#         # Create the log file *before* patching 'open'
-#         open(log_file_path, "w").close()
-#         with open(log_file_path, "a") as log_file:
-#             with pytest.raises(SystemExit):
-#                 move_audio_book_files(
-#                     audio_file_extension,
-#                     books_json_path,
-#                     destination_dir,
-#                     "OpenAudible",
-#                     False,
-#                     log_file,
-#                     purchased_how_long_ago,
-#                     source_dir,
-#                 )
-
-
-# def test_sanitize_name():
-#     assert sanitize_name("Test, Name with spaces") == "Test_Name_with_spaces"
-#     assert sanitize_name("Name.with.dots") == "Name.with.dots"
-#     assert sanitize_name("Name with invalid : / \\ ? * |") == "Name_with_invalid"
-
-
-# def test_make_directory_structure(test_environment):
-#     (
-#         source_dir,
-#         destination_dir,
-#         audio_file_extension,
-#         books_json_path,
-#         log_file_path,
-#         purchased_how_long_ago,
-#     ) = test_environment
-
-#     author_dir = "Test Author"
-#     series_dir = "Test Series"
-#     book_title_dir = "Test Book"
-#     expected_path = os.path.join(
-#         destination_dir, author_dir, series_dir, book_title_dir
-#     )
-#     result_path = make_directory_structure(
-#         author_dir, series_dir, book_title_dir, destination_dir
-#     )
-#     assert result_path == expected_path
-#     assert os.path.exists(expected_path)
-
-
-# def test_process_open_audible_book_json(test_data):
-#     books_json, _ = test_data
-#     book_data = books_json[0]
-#     processed_data = process_open_audible_book_json(book_data)
-#     assert processed_data["author"] == "Craig Smith"
-#     assert processed_data["series"] == "Test Series"
-#     assert processed_data["volumeNumber"] == 1
-
-
-# def test_process_libation_book_json(test_data):
-#     _, libation_books_json = test_data
-#     book_data = libation_books_json[0]
-#     processed_data = process_libation_book_json(book_data)
-#     assert processed_data["author"] == "Craig Smith"
-#     assert processed_data["series"] == "Test Series"
-#     assert processed_data["volumeNumber"] == "1"
-#     assert processed_data["purchase_date"] == "2024-07-24"
-
 import pytest
 import json
 import os
-import shutil
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
-from unittest.mock import mock_open, patch
 from openaudible_to_ab import (
     move_audio_book_files,
     sanitize_name,
@@ -440,3 +226,71 @@ def test_error_handling(setup_test_environment):
             purchased_how_long_ago=7,
             source_dir=setup_test_environment["source_dir"],
         )
+
+
+@pytest.mark.parametrize(
+    "text,expected_transformed_text",
+    [
+        ("some text", "some_text"),
+        ("other.,text", "other.text"),
+        ("valid_text", "valid_text"),
+    ],
+)
+def test_sanitize_name(text, expected_transformed_text):
+    sanitzed_text = sanitize_name(text)
+    assert sanitzed_text == expected_transformed_text
+
+
+@pytest.mark.parametrize(
+    "author,series,title,abs_folder,expected_dir",
+    [
+        (
+            "Frank_Sin",
+            "Into_the_Beyond",
+            "An_Intro",
+            "/tmp/audio_books",
+            "/tmp/audio_books/Frank_Sin/Into_the_Beyond/An_Intro",
+        )
+    ]
+)
+def test_make_directory_structure(author: str, series: str, title: str,
+                                  abs_folder: str, expected_dir: str):
+    output = make_directory_structure(author, series, title, abs_folder)
+    assert output == expected_dir
+    assert os.path.exists(output)
+
+
+@pytest.mark.parametrize(
+    "book_data,expected_book_data",
+    [
+        (
+            {
+                "asin": 1234,
+                "author": "Frank Sin",
+                "summary": "This is a fake book",
+                "filename": "Some book.m4b",
+                "purchase_date": "2025-01-01",
+                "series_name": "An Interesting Series",
+                "title_short": "Just A Book",
+                "title": "Just A Book: Volume 1",
+                "series_sequence": "1",
+            },
+            {
+                "asin": 1234,
+                "author": "Frank_Sin",
+                "description": "This is a fake book",
+                "filename": "Some book.m4b",
+                "purchase_date": "2025-01-01",
+                "series": "An Interesting Series",
+                "short_title": "Just A Book",
+                "title": "Just A Book: Volume 1",
+                "volumeNumber": "1",
+            },
+        )
+    ],
+)
+def test_process_open_audible_book_json(book_data, expected_book_data):
+    processed_book = process_open_audible_book_json(book_data.copy())
+    assert processed_book == expected_book_data
+
+

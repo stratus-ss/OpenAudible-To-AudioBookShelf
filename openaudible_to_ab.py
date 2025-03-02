@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 import requests
 import time
 import subprocess
-import yaml
 
 from config import Config
 

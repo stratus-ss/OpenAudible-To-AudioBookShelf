@@ -12,6 +12,7 @@ This script automates the process of moving audiobook files from OpenAudible or 
 * **Error Handling and Logging:** Provides informative logging and error messages.
 * **Desktop Notifications:** Uses notify-send to display processing status.
 * **Configurable:** Allows customization through command-line arguments.
+* **CLI or YAML Arguments:** Accepts either CLI flags or a yaml file with arguments
 
 ## Prerequisites
 
@@ -19,12 +20,19 @@ This script automates the process of moving audiobook files from OpenAudible or 
 * **Required Python Packages:** Install the necessary packages using:
 
 ```bash
-pip install requests
+pip install -r requirements.txt
 ```
 
 * **OpenAudible or Libation:** This script assumes you have either OpenAudible or Libation installed and configured.
 * **AudioBookShelf:** You need a running instance of AudioBookShelf and its API details.
 * **notify-send:** For desktop notifications.
+
+> [!NOTE]
+> Libation does not export it's library by default. Currently you need to export this yourself
+> ```
+> libationcli export --path $HOME/libation/libation.json --json
+> ```
+> In the future this may be done automatically for you
 
 ## Usage
 
@@ -60,23 +68,49 @@ python openaudible_to_ab.py \
   --download-program "OpenAudible" 
 ```
 
+> [!NOTE]
+> There is an example YAML file `arguments.yaml` which is included in the repo.
+> Currently the YAML looks slightly different than the CLI arguments because of the way
+> I chose to rename the arguments internal to the script. This file currently looks like:
+> ```
+>   api-token: ""
+>  books-json: ""
+>  purchased_how_long_ago: 0
+>  destination_book_directory: "/tmp/books/"
+>  download-program: OpenAudible
+>  audio_file_extension: ".m4b"
+>  libation-folder-cleanup: False
+>  library-id: ""
+>  log-file: "/tmp/book_processing.txt"
+>  server-url: ""
+>  source_audio_book_directory: ""
+>```
+
 ## Arguments
 
-* **--server-url:** The base URL of your AudioBookShelf instance.
 * **--api-token:** Your AudioBookShelf API token.
-* **--library-id:** The ID of your library in AudioBookShelf.
 * **--books-json:** Path to the JSON file exported from OpenAudible or Libation containing book information.
-* **--source-dir:** The directory where your download program saves audiobook files.
-* **--dest-dir:** The destination directory where you want to organize your audiobooks.
-* **--log-file:** Path to the log file.
-* **--file-ext:** Audio file extension (defaults to .m4b).
 * **--days:** Number of days to look back for recently purchased books (defaults to 7).
-* **--download-program:** Specify the download program - "OpenAudible" or "Libation" (defaults to "OpenAudible").
+* **--dest-dir:** The destination directory where you want to organize your audiobooks.
+* **--download-program:** Specify the download program - OpenAudible or Libation (defaults to OpenAudible).
+* **--file-ext:** Audio file extension (defaults to .m4b).
 * **--libation-folder-cleanup:** Whether to delete the source folder in Libation directory after processing (defaults to False).
+* **--library-id:** The ID of your library in AudioBookShelf.
+* **--log-file:** Path to the log file.
+* **--server-url:** The base URL of your AudioBookShelf instance.
+* **--source-dir:** The directory where your download program saves audiobook files.
 
 ## Workflow
 
-1. **Export Book Data:** Export your OpenAudible or Libation library as a JSON file.
+1. **Export Book Data:** Export your OpenAudible or Libation library as a JSON file. 
+> [!NOTE]
+> OpenAudible does this automatically when you first login.
+> Libation does not export it's library by default. Currently you need to export this yourself
+> ```
+> libationcli export --path $HOME/libation/libation.json --json
+> ```
+> In the future this may be done automatically for you
+ 
 2. **Configuration:** Set the required command-line arguments.
 3. **Execution:** Run the script. It will:
    * Process books purchased within the specified timeframe
