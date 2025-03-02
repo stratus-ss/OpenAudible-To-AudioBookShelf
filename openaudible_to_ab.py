@@ -6,7 +6,9 @@ from datetime import datetime, timedelta, timezone
 import requests
 import time
 import subprocess
-import argparse
+import yaml
+
+from config import Config
 
 
 def scan_library_for_books(
@@ -82,11 +84,11 @@ def get_audio_bookshelf_recent_books(
         recent_items = []
         for book in book_list:
             log_file.write(f"Fetching {book} information from Audio BookShelf\n")
-            recent_items.extend(
-                item
-                for item in json_response.json()["results"]
-                if book in item["media"]["metadata"]["title"]
-            )
+            for item in json_response.json()["results"]:
+                if book["title"] in item["media"]["metadata"]["title"]:
+                    # Update the nested 'asin' key with the book's asin
+                    item["media"]["metadata"]["asin"] = book["asin"]
+                    recent_items.append(item)
     return recent_items
 
 
@@ -103,8 +105,11 @@ def process_audio_books(
     """
     for item in todays_items:  # Check last 5 items
         match_payload = {
+            "author": item["media"]["metadata"]["authorName"],
             "provider": "audible",
             "asin": item["media"]["metadata"]["asin"],
+            "title": item["media"]["metadata"]["title"],
+            "overrideDefaults": "true",
         }
         api_url = f"{server_url}/api/items/{item['id']}/match"
         output = requests.post(
@@ -113,7 +118,9 @@ def process_audio_books(
             headers={"Authorization": f"Bearer {api_token}"},
         )
         if output.ok:
-            log_file.write(f"")
+            log_file.write(
+                f"Finished Matching {item["media"]["metadata"]["title"]} using the Audible Provider"
+            )
             subprocess.run(
                 [
                     "notify-send",
@@ -327,7 +334,8 @@ def move_audio_book_files(
                         f"{book_data['title']} has an existing file but it will be replaced! \n"
                     )
                     log_file.write(
-                        f"The downloaded file is larger ({downloaded_file_size}) than the existing file ({existing_file_size}).\n"
+                        f"The downloaded file is larger ({downloaded_file_size}) than the existing file \
+                            ({existing_file_size}).\n"
                     )
             books_to_process_in_audio_bookself.append(book_data["short_title"])
             if os.path.exists(downloaded_audio_file_path):
@@ -335,7 +343,8 @@ def move_audio_book_files(
             if libation_folder_cleanup:
                 shutil.rmtree(libation_source_dir)
             log_file.write(
-                f"{datetime.now()} - INFO - Processed and moved files for book: {book_data['title']} under '{author_dir}/{series_dir}'\n"
+                f"{datetime.now()} - INFO - Processed and moved files for book: {book_data['title']} under \
+                    '{author_dir}/{series_dir}'\n"
             )
         except Exception as e:
             error_title = (
@@ -350,109 +359,9 @@ def move_audio_book_files(
     return books_to_process_in_audio_bookself
 
 
-def parse_arguments():
-    """
-    Parse command line arguments.
-
-    Returns:
-        argparse.Namespace: The parsed command line arguments.
-    """
-    parser = argparse.ArgumentParser(description="Process and organize audio books.")
-
-    parser.add_argument(
-        "--api-token",
-        dest="api_token",
-        type=str,
-        default="",
-        help="The API token for authentication",
-    )
-
-    parser.add_argument(
-        "--books-json",
-        dest="books_json_path",
-        type=str,
-        default="",
-        help="Path to the JSON file containing book information",
-    )
-
-    parser.add_argument(
-        "--days",
-        dest="purchased_how_long_ago",
-        type=int,
-        default=7,
-        help="Process books purchased within this many days (default: 7)",
-    )
-
-    parser.add_argument(
-        "--dest-dir",
-        dest="destination_book_directory",
-        type=str,
-        default="",
-        help="Destination directory for organized audio books",
-    )
-
-    parser.add_argument(
-        "--download-program",
-        dest="download_program",
-        type=str,
-        default="OpenAudible",
-        help="Specify the download project (OpenAudible or Libation)",
-    )
-
-    parser.add_argument(
-        "--file-ext",
-        dest="audio_file_extension",
-        type=str,
-        default=".m4b",
-        help="Audio file extension (default: .m4b)",
-    )
-
-    parser.add_argument(
-        "--libation-folder-cleanup",
-        dest="libation_folder_cleanup",
-        type=bool,
-        default=False,
-        help="Delete the source folder in Libation Directory",
-    )
-
-    parser.add_argument(
-        "--library-id",
-        dest="library_id",
-        type=str,
-        default="",
-        help="The library ID in AudioBookShelf",
-    )
-
-    parser.add_argument(
-        "--log-file",
-        dest="log_file_path",
-        type=str,
-        default="",
-        help="Path to the log file",
-    )
-
-    parser.add_argument(
-        "--server-url",
-        dest="server_url",
-        type=str,
-        default="",
-        help="The base URL of the AudioBookShelf server",
-    )
-
-    parser.add_argument(
-        "--source-dir",
-        dest="source_audio_book_directory",
-        type=str,
-        default="",
-        help="Source directory containing audio book files",
-    )
-
-    return parser.parse_args()
-
-
-def main():
+def main(*args: str):
     # Parse command line arguments
-    args = parse_arguments()
+    args = Config.from_args(*args)
 
     try:
         log_file = open(args.log_file_path, "a")

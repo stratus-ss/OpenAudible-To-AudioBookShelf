@@ -1,0 +1,11 @@
+  api-token: ""
+  books-json: ""
+  purchased_how_long_ago: 0
+  destination_book_directory: "/tmp/books/"
+  download-program: OpenAudible
+  audio_file_extension: ".m4b"
+  libation-folder-cleanup: False
+  library-id: ""
+  log-file: "/tmp/book_processing.txt"
+  server-url: ""
+  source_audio_book_directory: ""
