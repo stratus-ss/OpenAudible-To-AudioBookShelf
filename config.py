@@ -2,7 +2,6 @@ import argparse
 import logging
 import sys
 import typing as t
-from functools import cached_property
 from pathlib import Path
 
 import yaml

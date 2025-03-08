@@ -384,6 +384,9 @@ def main(*args: str):
     # Now that the files have been moved, we want to kick off the AudioBookShelf scanner
     scan_library_for_books(args.server_url, args.library_id, args.api_token, log_file)
 
+    # We often need a back-off time in order to allow the scan to complete
+    time.sleep(15)
+    
     # Sometimes the scanner does not identify the books correctly
     # In my case I buy books from audible so I want to force the match with audible content
     books_from_audiobookshelf = get_all_books(
