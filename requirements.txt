@@ -1,2 +1,5 @@
 requests
 pyyaml
+openai
+pydantic
+bs4

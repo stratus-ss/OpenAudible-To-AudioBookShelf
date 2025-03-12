@@ -1,4 +1,4 @@
-  api-token: ""
+  abs-api-token: ""
   books-json: ""
   purchased_how_long_ago: 0
   destination_book_directory: "/tmp/books/"

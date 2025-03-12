@@ -19,8 +19,8 @@ def _get_parser() -> argparse.ArgumentParser:
     """
     parser = argparse.ArgumentParser(description="Process and organize audio books.")
     parser.add_argument(
-        "--api-token",
-        dest="api_token",
+        "--abs-api-token",
+        dest="abs_api_token",
         type=str,
         default="",
         help="The API token for authentication",
@@ -184,7 +184,7 @@ class Config:
         """
         Ensure that necessary options are available for the parser to function.
         The required options are:
-        - api_token
+        - abs_api_token
         - books_json_path
         - destination_book_directory
         - library_id
@@ -196,7 +196,7 @@ class Config:
         """
 
         required = {
-            "api_token": "API token not specified in YAML or command line",
+            "abs_api_token": "API token not specified in YAML or command line",
             "books_json_path": "Books JSON file not specified in YAML or command line",
             "destination_book_directory": "Destination directory not specified in YAML or command line",
             "library_id": "Library ID not specified in YAML or command line",

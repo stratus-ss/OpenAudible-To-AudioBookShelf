@@ -7,11 +7,11 @@ import requests
 import time
 import subprocess
 
-from config import Config
+from modules.config import Config
 
 
 def scan_library_for_books(
-    server_url: str, library_id: str, api_token: str, log_file
+    server_url: str, library_id: str, abs_api_token: str, log_file
 ) -> requests.Response:
     """
     Scan the library for books using the provided server URL, library ID, and API token.
@@ -19,7 +19,7 @@ def scan_library_for_books(
     Args:
         server_url (str): The base URL of the server.
         library_id (str): The unique identifier of the library.
-        api_token (str): The authentication token for API access.
+        abs_api_token (str): The authentication token for API access.
 
     Returns:
         requests.Response: The response object containing the scan results.
@@ -27,12 +27,12 @@ def scan_library_for_books(
     log_file.write("Starting the scan of Audio Book Shelf...\n")
     return requests.post(
         f"{server_url}/api/libraries/{library_id}/scan",
-        headers={"Authorization": f"Bearer {api_token}"},
+        headers={"Authorization": f"Bearer {abs_api_token}"},
     )
 
 
 def get_all_books(
-    server_url: str, library_id: str, api_token: str, log_file
+    server_url: str, library_id: str, abs_api_token: str, log_file
 ) -> requests.Response:
     """
     Retrieve all books from the specified library using the provided server URL, library ID, and API token.
@@ -40,7 +40,7 @@ def get_all_books(
     Args:
         server_url (str): The base URL of the server.
         library_id (str): The unique identifier of the library.
-        api_token (str): The authentication token for API access.
+        abs_api_token (str): The authentication token for API access.
 
     Returns:
         requests.Response: The response object containing all book items.
@@ -48,7 +48,7 @@ def get_all_books(
     log_file.write("Fetching the library from Audio BookShelf...\n")
     return requests.get(
         f"{server_url}/api/libraries/{library_id}/items?sort=addedAt",
-        headers={"Authorization": f"Bearer {api_token}"},
+        headers={"Authorization": f"Bearer {abs_api_token}"},
     )
 
 
@@ -92,7 +92,7 @@ def get_audio_bookshelf_recent_books(
 
 
 def process_audio_books(
-    todays_items: list[dict], server_url: str, api_token: str, log_file
+    todays_items: list[dict], server_url: str, abs_api_token: str, log_file
 ) -> None:
     """
     Process each audio book item by attempting to match it with the server.
@@ -100,7 +100,7 @@ def process_audio_books(
     Args:
         todays_items (list[dict]): List of dictionaries containing today's audio book items.
         server_url (str): The base URL of the server.
-        api_token (str): The authentication token for API access.
+        abs_api_token (str): The authentication token for API access.
     """
     for item in todays_items:  # Check last 5 items
         match_payload = {
@@ -114,7 +114,7 @@ def process_audio_books(
         output = requests.post(
             api_url,
             json=match_payload,
-            headers={"Authorization": f"Bearer {api_token}"},
+            headers={"Authorization": f"Bearer {abs_api_token}"},
         )
         if output.ok:
             log_file.write(
@@ -168,19 +168,19 @@ def process_open_audible_book_json(book_data: dict) -> dict:
     """
     author_name = book_data.get("author", "").split(",")[0].strip()
     return {
-        "asin": book_data.get("asin"),
+        "asin": book_data.get("asin", ""),
         "author": sanitize_name(author_name),
-        "description": book_data.get("summary"),
+        "description": book_data.get("summary", ""),
         "filename": book_data.get("filename"),
         "purchase_date": book_data.get("purchase_date"),
-        "series": book_data.get("series_name"),
+        "series": book_data.get("series_name", ""),
         "short_title": book_data.get("title_short"),
         "title": book_data.get("title"),
-        "volumeNumber": book_data.get("series_sequence"),
+        "volumeNumber": book_data.get("series_sequence", ""),
     }
 
 
-def process_libation_book_json(book_data: dict) -> dict:
+def process_libation_book_json(book_data: dict, log_file) -> dict:
     """
     Map the keys of the libation data dictionary to a standardized format.
     Libation has the following relevent keys:
@@ -197,12 +197,23 @@ def process_libation_book_json(book_data: dict) -> dict:
     Returns:
         dict: A new dictionary with standardized key-value pairs.
     """
-    full_title = " - ".join([book_data.get("Title"), book_data.get("Subtitle")])
+    full_title = (
+        " - ".join([book_data.get("Title"), book_data.get("Subtitle")])
+        if book_data.get("Subtitle")
+        else book_data.get("Title")
+    )
+
     series_sequence = (
         book_data.get("SeriesOrder").split()[0] if book_data.get("SeriesOrder") else ""
     )
-    filename = f"{book_data.get("Title")}: {book_data.get("Subtitle")} [{book_data.get("AudibleProductId")}]"
-    book_folder = f"{book_data.get("Title")} [{book_data.get("AudibleProductId")}]"
+
+    filename = (
+        f"{book_data.get('Title')}: {book_data.get('Subtitle')} [{book_data.get('AudibleProductId')}]"
+        if book_data.get("Subtitle")
+        else f"{book_data.get('Title')} [{book_data.get('AudibleProductId')}]"
+    )
+
+    book_folder = f"{book_data.get('Title')} [{book_data.get('AudibleProductId')}]"
     purchase_date = book_data.get("DateAdded")
     # Split on timezone offset indicator and take the first part
     if "+" in purchase_date:
@@ -223,7 +234,7 @@ def process_libation_book_json(book_data: dict) -> dict:
         "filename": filename,
         "libation_book_folder": book_folder,
         "purchase_date": formatted_purchase_date,
-        "series": book_data.get("SeriesNames"),
+        "series": book_data.get("SeriesNames", ""),
         "short_title": book_data.get("Title"),
         "title": full_title,
         "volumeNumber": series_sequence,
@@ -288,7 +299,9 @@ def move_audio_book_files(
             if download_program == "OpenAudible":
                 book_data = process_open_audible_book_json(book)
             else:
-                book_data = process_libation_book_json(book)
+                log_file.write(json.dumps(book))
+                book_data = process_libation_book_json(book, log_file)
+                log_file.write(json.dumps(book_data))
                 # Need to override the source_dir as Libation puts
                 # Books/{book_title}/filename
                 libation_source_dir = (
@@ -382,7 +395,9 @@ def main(*args: str):
     )
 
     # Now that the files have been moved, we want to kick off the AudioBookShelf scanner
-    scan_library_for_books(args.server_url, args.library_id, args.api_token, log_file)
+    scan_library_for_books(
+        args.server_url, args.library_id, args.abs_api_token, log_file
+    )
 
     # We often need a back-off time in order to allow the scan to complete
     time.sleep(15)
@@ -390,7 +405,7 @@ def main(*args: str):
     # Sometimes the scanner does not identify the books correctly
     # In my case I buy books from audible so I want to force the match with audible content
     books_from_audiobookshelf = get_all_books(
-        args.server_url, args.library_id, args.api_token, log_file
+        args.server_url, args.library_id, args.abs_api_token, log_file
     )
     most_recent_books = get_audio_bookshelf_recent_books(
         books_from_audiobookshelf,
@@ -398,7 +413,9 @@ def main(*args: str):
         days_ago=args.purchased_how_long_ago,
         book_list=book_list,
     )
-    process_audio_books(most_recent_books, args.server_url, args.api_token, log_file)
+    process_audio_books(
+        most_recent_books, args.server_url, args.abs_api_token, log_file
+    )
     log_file.close()
 
 

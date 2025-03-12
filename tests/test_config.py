@@ -2,12 +2,11 @@ import tempfile
 import logging
 from pathlib import Path
 import sys
+from modules.config import Config
 from collections.abc import Generator
 
 import pytest
 import yaml
-
-from config import Config
 
 
 @pytest.fixture
@@ -76,7 +75,7 @@ def test_yaml_load_file_not_found(
         config_obj._load_yaml()
 
     assert caplog.record_tuples == [
-        ("config", logging.CRITICAL, "YAML file not found: %s" % yamlfile)
+        ("modules.config", logging.CRITICAL, "YAML file not found: %s" % yamlfile)
     ]
 
 
@@ -92,7 +91,7 @@ def test_yaml_load_invalid_file(
         config_obj._load_yaml()
 
     assert caplog.record_tuples == [
-        ("config", logging.CRITICAL, "Error parsing YAML file")
+        ("modules.config", logging.CRITICAL, "Error parsing YAML file")
     ]
 
 
@@ -114,7 +113,7 @@ def test_cli_yaml_and_args(
         # Verify the correct error message was logged
         assert caplog.record_tuples == [
             (
-                "config",
+                "modules.config",
                 logging.ERROR,
                 "When using --yaml, no other arguments should be provided.",
             )
@@ -136,7 +135,7 @@ def assert_config_correct(config_dict: dict, config_obj: Config) -> None:
         # Valid configuration: All required fields are present → no exit and no log entries.
         (
             {
-                "api_token": "test_token",
+                "abs_api_token": "test_token",
                 "books_json_path": "/path/to/books.json",
                 "destination_book_directory": "/path/to/dest",
                 "library_id": "library123",
@@ -152,32 +151,32 @@ def assert_config_correct(config_dict: dict, config_obj: Config) -> None:
             True,
             [
                 (
-                    "config",
+                    "modules.config",
                     logging.CRITICAL,
                     "API token not specified in YAML or command line",
                 ),
                 (
-                    "config",
+                    "modules.config",
                     logging.CRITICAL,
                     "Books JSON file not specified in YAML or command line",
                 ),
                 (
-                    "config",
+                    "modules.config",
                     logging.CRITICAL,
                     "Destination directory not specified in YAML or command line",
                 ),
                 (
-                    "config",
+                    "modules.config",
                     logging.CRITICAL,
                     "Library ID not specified in YAML or command line",
                 ),
                 (
-                    "config",
+                    "modules.config",
                     logging.CRITICAL,
                     "Server URL not specified in YAML or command line",
                 ),
                 (
-                    "config",
+                    "modules.config",
                     logging.CRITICAL,
                     "Source directory not specified in YAML or command line",
                 ),
@@ -204,7 +203,7 @@ def test_validate_param(config_kwargs, expect_exit, expected_logs, caplog):
 @pytest.mark.parametrize(
     "cli_args,expected_attr",
     [
-        (["--api-token", "123"], {"api_token": "123"}),
+        (["--abs-api-token", "123"], {"abs_api_token": "123"}),
         (["--days", "3"], {"purchased_how_long_ago": 3}),
         (["--file-ext", ".mp3"], {"audio_file_extension": ".mp3"}),
         (["--libation-folder-cleanup", "True"], {"libation_folder_cleanup": True}),
@@ -221,7 +220,7 @@ def test_cli_argument_parsing(cli_args, expected_attr):
 @pytest.mark.parametrize(
     "args",
     [
-        ["--yaml", "config.yaml", "--api-token", "123"],
+        ["--yaml", "config.yaml", "--abs-api-token", "123"],
         ["--yaml", "config.yaml", "--days=5"],
     ],
 )
@@ -236,7 +235,7 @@ def test_yaml_exclusivity(args):
     [
         (
             {
-                "api_token": "yaml_token",
+                "abs_api_token": "yaml_token",
                 "books_json_path": "/yaml/books.json",
                 "purchased_how_long_ago": 10,
                 "audio_file_extension": ".ogg",
