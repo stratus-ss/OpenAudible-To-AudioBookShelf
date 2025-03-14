@@ -2,158 +2,17 @@
 import json
 import os
 import shutil
-from datetime import datetime, timedelta, timezone
-import requests
 import time
-import subprocess
+from datetime import datetime, timedelta, timezone
 
+from modules.audio_bookshelf import (
+    get_all_books,
+    get_audio_bookshelf_recent_books,
+    process_audio_books,
+    scan_library_for_books,
+)
 from modules.config import Config
-
-
-def scan_library_for_books(
-    server_url: str, library_id: str, abs_api_token: str, log_file
-) -> requests.Response:
-    """
-    Scan the library for books using the provided server URL, library ID, and API token.
-
-    Args:
-        server_url (str): The base URL of the server.
-        library_id (str): The unique identifier of the library.
-        abs_api_token (str): The authentication token for API access.
-
-    Returns:
-        requests.Response: The response object containing the scan results.
-    """
-    log_file.write("Starting the scan of Audio Book Shelf...\n")
-    return requests.post(
-        f"{server_url}/api/libraries/{library_id}/scan",
-        headers={"Authorization": f"Bearer {abs_api_token}"},
-    )
-
-
-def get_all_books(
-    server_url: str, library_id: str, abs_api_token: str, log_file
-) -> requests.Response:
-    """
-    Retrieve all books from the specified library using the provided server URL, library ID, and API token.
-
-    Args:
-        server_url (str): The base URL of the server.
-        library_id (str): The unique identifier of the library.
-        abs_api_token (str): The authentication token for API access.
-
-    Returns:
-        requests.Response: The response object containing all book items.
-    """
-    log_file.write("Fetching the library from Audio BookShelf...\n")
-    return requests.get(
-        f"{server_url}/api/libraries/{library_id}/items?sort=addedAt",
-        headers={"Authorization": f"Bearer {abs_api_token}"},
-    )
-
-
-def get_audio_bookshelf_recent_books(
-    json_response: requests.Response, log_file, days_ago: int = 0, book_list: list = []
-) -> list[dict]:
-    """
-    Filter recent audio books from the provided JSON response based on the number of days ago.
-
-    Args:
-        json_response (requests.Response): The response object containing book data.
-        days_ago (int): Number of days to consider as "recent" (default is 0)
-        book_list (list): A list of book titles
-
-    Returns:
-        list[dict]: A list of dictionaries representing recent audio books.
-    """
-    # If we get a book_list with items, we want to only update those items
-    # and not all items in the last N days
-    if book_list:
-        days_ago = 0
-    if days_ago > 0:
-        target_date = (datetime.now(timezone.utc) - timedelta(days=days_ago)).date()
-        log_file.write(f"Getting the list of books from the last {days_ago} days\n")
-        recent_items = [
-            item
-            for item in json_response.json()["results"]
-            if datetime.fromtimestamp(item["addedAt"] / 1000, timezone.utc).date()
-            >= target_date
-        ]
-    else:
-        recent_items = []
-        for book in book_list:
-            log_file.write(f"Fetching {book} information from Audio BookShelf\n")
-            for item in json_response.json()["results"]:
-                if book["title"] in item["media"]["metadata"]["title"]:
-                    # Update the nested 'asin' key with the book's asin
-                    item["media"]["metadata"]["asin"] = book["asin"]
-                    recent_items.append(item)
-    return recent_items
-
-
-def process_audio_books(
-    todays_items: list[dict], server_url: str, abs_api_token: str, log_file
-) -> None:
-    """
-    Process each audio book item by attempting to match it with the server.
-
-    Args:
-        todays_items (list[dict]): List of dictionaries containing today's audio book items.
-        server_url (str): The base URL of the server.
-        abs_api_token (str): The authentication token for API access.
-    """
-    for item in todays_items:  # Check last 5 items
-        match_payload = {
-            "author": item["media"]["metadata"]["authorName"],
-            "provider": "audible",
-            "asin": item["media"]["metadata"]["asin"],
-            "title": item["media"]["metadata"]["title"],
-            "overrideDefaults": "true",
-        }
-        api_url = f"{server_url}/api/items/{item['id']}/match"
-        output = requests.post(
-            api_url,
-            json=match_payload,
-            headers={"Authorization": f"Bearer {abs_api_token}"},
-        )
-        if output.ok:
-            log_file.write(
-                f"Finished Matching {item["media"]["metadata"]["title"]} using the Audible Provider"
-            )
-            subprocess.run(
-                [
-                    "notify-send",
-                    "Audio Bookself",
-                    f"Processing {item['media']['metadata']['title']}",
-                ]
-            )
-        else:
-            subprocess.run(
-                [
-                    "notify-send",
-                    "Error",
-                    f"Error with {item['media']['metadata']['title']}",
-                ]
-            )
-        time.sleep(2)
-
-
-def sanitize_name(name: str) -> str:
-    """
-    Sanitize a name by replacing commas with underscores and spaces with single underscores.
-
-    Args:
-        name (str): The input name to sanitize.
-
-    Returns:
-        str: The sanitized name.
-    """
-    name_without_commas = name.replace(",", "")
-    name_with_underscores = name_without_commas.replace(" ", "_")
-    sanitized = "".join(
-        [c for c in name_with_underscores if c.isalnum() or c in ("_", ".")]
-    )
-    return sanitized.rstrip()
+from modules.utils import _parse_date, make_directory_structure, sanitize_name
 
 
 def process_open_audible_book_json(book_data: dict) -> dict:
@@ -180,7 +39,7 @@ def process_open_audible_book_json(book_data: dict) -> dict:
     }
 
 
-def process_libation_book_json(book_data: dict, log_file) -> dict:
+def process_libation_book_json(book_data: dict) -> dict:
     """
     Map the keys of the libation data dictionary to a standardized format.
     Libation has the following relevent keys:
@@ -216,16 +75,7 @@ def process_libation_book_json(book_data: dict, log_file) -> dict:
     book_folder = f"{book_data.get('Title')} [{book_data.get('AudibleProductId')}]"
     purchase_date = book_data.get("DateAdded")
     # Split on timezone offset indicator and take the first part
-    if "+" in purchase_date:
-        purchase_date = purchase_date.split("+")[0]
-    elif "-" in purchase_date:  # Handle negative offsets
-        purchase_date = purchase_date.split("-")[0]
-    # For consistency, add a microsecond to any book that does not have this
-    if "." not in purchase_date:
-        purchase_date += ".0"
-    formatted_purchase_date = datetime.strptime(
-        purchase_date, "%Y-%m-%dT%H:%M:%S.%f"
-    ).strftime("%Y-%m-%d")
+    formatted_purchase_date = _parse_date(purchase_date)
 
     return {
         "asin": book_data.get("AudibleProductId"),
@@ -239,34 +89,6 @@ def process_libation_book_json(book_data: dict, log_file) -> dict:
         "title": full_title,
         "volumeNumber": series_sequence,
     }
-
-
-def make_directory_structure(
-    author_dir: str, series_dir: str, book_title_dir: str, destination_dir: str
-) -> str:
-    """
-    Create a directory structure for organizing audio books.
-
-    Args:
-        author_dir (str): The directory name for the author.
-        series_dir (str): The optional directory name for the series.
-        book_title_dir (str): The directory name for the specific book title.
-        destination_dir (str): The base destination directory.
-
-    Returns:
-        str: The full path of the created directory structure.
-    """
-    audio_book_destination_dir = os.path.join(destination_dir, author_dir)
-    if series_dir:
-        audio_book_destination_dir = os.path.join(
-            audio_book_destination_dir, series_dir
-        )
-    audio_book_destination_dir = os.path.join(
-        audio_book_destination_dir, book_title_dir
-    )
-    if not os.path.exists(audio_book_destination_dir):
-        os.makedirs(audio_book_destination_dir)
-    return audio_book_destination_dir
 
 
 def move_audio_book_files(
@@ -289,19 +111,21 @@ def move_audio_book_files(
 
         log_file.write(f"{datetime.now()} - Error reading JSON file: {e}")
         exit(1)
-
-    target_date = (
-        datetime.now(timezone.utc) - timedelta(days=purchased_how_long_ago)
-    ).date()
+    # If set to zero go back in time as a way to say go back infinity
+    # 9125 days is 25 years
+    if purchased_how_long_ago == 0:
+        target_date = (datetime.now(timezone.utc) - timedelta(days=9125)).date()
+    else:
+        target_date = (
+            datetime.now(timezone.utc) - timedelta(days=purchased_how_long_ago)
+        ).date()
     books_to_process_in_audio_bookself = []
     for book in books:
         try:
             if download_program == "OpenAudible":
                 book_data = process_open_audible_book_json(book)
             else:
-                log_file.write(json.dumps(book))
-                book_data = process_libation_book_json(book, log_file)
-                log_file.write(json.dumps(book_data))
+                book_data = process_libation_book_json(book)
                 # Need to override the source_dir as Libation puts
                 # Books/{book_title}/filename
                 libation_source_dir = (
@@ -324,6 +148,7 @@ def move_audio_book_files(
                 downloaded_audio_file_path = os.path.join(
                     libation_source_dir, audio_file_name
                 )
+
             if not (os.path.exists(downloaded_audio_file_path)):
                 continue
             audio_book_destination_dir = make_directory_structure(
@@ -374,7 +199,9 @@ def move_audio_book_files(
 def main(*args: str):
     # Parse command line arguments
     args = Config.from_args(*args)
-
+    if args.generate_yaml:
+        args.generate_yaml_from_parser(file_path="/tmp/arguments.yaml")
+        exit()
     try:
         log_file = open(args.log_file_path, "a")
     except IOError as e:
@@ -401,7 +228,7 @@ def main(*args: str):
 
     # We often need a back-off time in order to allow the scan to complete
     time.sleep(15)
-    
+
     # Sometimes the scanner does not identify the books correctly
     # In my case I buy books from audible so I want to force the match with audible content
     books_from_audiobookshelf = get_all_books(
@@ -413,7 +240,7 @@ def main(*args: str):
         days_ago=args.purchased_how_long_ago,
         book_list=book_list,
     )
-    process_audio_books(
+    _ = process_audio_books(
         most_recent_books, args.server_url, args.abs_api_token, log_file
     )
     log_file.close()

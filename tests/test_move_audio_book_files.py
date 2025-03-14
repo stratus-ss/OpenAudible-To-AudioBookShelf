@@ -2,9 +2,12 @@ import pytest
 import json
 import os
 
+from modules.utils import sanitize_name
 from datetime import datetime, timedelta, timezone
 from openaudible_to_ab import (
     move_audio_book_files,
+    make_directory_structure,
+    process_open_audible_book_json,
 )
 
 
@@ -51,7 +54,6 @@ def setup_test_environment(tmp_path):
     ],
 )
 def test_date_filtering(setup_test_environment, test_data):
-    old_date = test_data["purchase_date"]
 
     args = {
         "audio_file_extension": ".m4b",

@@ -12,17 +12,17 @@ import yaml
 @pytest.fixture
 def config_dict(request: pytest.FixtureRequest) -> Generator[dict, None, None]:
     default_dict = {
-        "api-token": "",
-        "books-json": "$HOME/OpenAudible/books.json",
-        "dest-dir": "",
-        "days": 7,
-        "download_program": "OpenAudible",
-        "file-ext": ".m4b",
+        "abs-api-token": "",
+        "books-json-path": "$HOME/OpenAudible/books.json",
+        "destination-book-directory": "",
+        "purchased-how-long-ago": 7,
+        "download-program": "OpenAudible",
+        "audio-file-extension": ".m4b",
         "libation-folder-cleanup": False,
         "library-id": "",
-        "log-file": "/tmp/book_processing.txt",
+        "log-file-path": "/tmp/book_processing.txt",
         "server-url": "",
-        "source-dir": "",
+        "source-audio-book-directory": "",
     }
     param = getattr(request, "param", None)
     if isinstance(param, dict):
@@ -204,8 +204,8 @@ def test_validate_param(config_kwargs, expect_exit, expected_logs, caplog):
     "cli_args,expected_attr",
     [
         (["--abs-api-token", "123"], {"abs_api_token": "123"}),
-        (["--days", "3"], {"purchased_how_long_ago": 3}),
-        (["--file-ext", ".mp3"], {"audio_file_extension": ".mp3"}),
+        (["--purchased-how-long-ago", "3"], {"purchased_how_long_ago": 3}),
+        (["--audio-file-extension", ".mp3"], {"audio_file_extension": ".mp3"}),
         (["--libation-folder-cleanup", "True"], {"libation_folder_cleanup": True}),
     ],
 )
@@ -248,7 +248,7 @@ def test_yaml_exclusivity(args):
         ),
     ],
 )
-def test_from_args_yaml_loading(yaml_content, expected_attrs):
+def test_from_args(yaml_content, expected_attrs):
     """Test YAML configuration properly overrides defaults"""
     with tempfile.NamedTemporaryFile(mode="w") as yaml_file:
         yaml.dump(yaml_content, yaml_file)
@@ -257,3 +257,58 @@ def test_from_args_yaml_loading(yaml_content, expected_attrs):
 
     for attr, value in expected_attrs.items():
         assert getattr(config, attr) == value
+
+
+@pytest.mark.parametrize(
+    "arguments, expected_yaml",
+    [
+        (
+            [
+                "--abs-api-token",
+                "zzzz",
+                "--books-json-path",
+                "books.json",
+                "--purchased-how-long-ago",
+                "0",
+                "--destination-book-directory",
+                "/tmp/ABS/books",
+                "--download-program",
+                "OpenAudible",
+                "--audio-file-extension",
+                ".m4b",
+                "--libation-folder-cleanup",
+                False,
+                "--library-id",
+                "123456",
+                "--log-file-path",
+                "/tmp/book_processing.txt",
+                "--server-url",
+                "http://example.com",
+                "--source-audio-book-directory",
+                "/tmp/OpenAudible/books",
+            ],
+            {
+                "abs_api_token": "zzzz",
+                "books_json_path": "books.json",
+                "purchased_how_long_ago": 0,
+                "destination_book_directory": "/tmp/ABS/books",
+                "download_program": "OpenAudible",
+                "audio_file_extension": ".m4b",
+                "libation_folder_cleanup": False,
+                "library_id": "123456",
+                "log_file_path": "/tmp/book_processing.txt",
+                "server_url": "http://example.com",
+                "source_audio_book_directory": "/tmp/OpenAudible/books",
+            },
+        ),
+    ],
+)
+def test_generate_yaml_from_parser(arguments, expected_yaml, tmp_path: Path) -> None:
+    config_obj = Config.from_args(False, *arguments)
+    tmp_file = tmp_path / "config.yaml"
+    config_obj.generate_yaml_from_parser(tmp_file)
+
+    with open(tmp_file, "r") as generated_file:
+        generated_yaml = yaml.safe_load(generated_file)
+
+    assert generated_yaml == expected_yaml

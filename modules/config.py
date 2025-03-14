@@ -27,7 +27,7 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--books-json",
+        "--books-json-path",
         dest="books_json_path",
         type=str,
         default="$HOME/OpenAudible/books.json",
@@ -35,7 +35,7 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--days",
+        "--purchased-how-long-ago",
         dest="purchased_how_long_ago",
         type=int,
         default=7,
@@ -43,7 +43,7 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--dest-dir",
+        "--destination-book-directory",
         dest="destination_book_directory",
         type=str,
         default="",
@@ -59,11 +59,20 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--file-ext",
+        "--audio-file-extension",
         dest="audio_file_extension",
         type=str,
         default=".m4b",
         help="Audio file extension (default: .m4b)",
+    )
+
+    parser.add_argument(
+        "--generate-yaml",
+        dest="generate_yaml",
+        # type=bool,
+        default=False,
+        action="store_true",
+        help="Generates a yaml file instead of running the command",
     )
 
     parser.add_argument(
@@ -83,7 +92,7 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--log-file",
+        "--log-file-path",
         dest="log_file_path",
         type=str,
         default="/tmp/book_processing.txt",
@@ -99,7 +108,7 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
-        "--source-dir",
+        "--source-audio-book-directory",
         dest="source_audio_book_directory",
         type=str,
         default="",
@@ -221,7 +230,7 @@ class Config:
         """
         Generate a YAML file containing all arguments from the given ArgumentParser.
 
-        This method creates a YAML file named "parser_arguments.yaml" in the current directory,
+        This method creates a YAML file named "arguments.yaml" in the current directory,
         containing all the arguments defined in the parser, excluding the --generate-yaml option,
         in a format compatible with _load_yaml.
         """
