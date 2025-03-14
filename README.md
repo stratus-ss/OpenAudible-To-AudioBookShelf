@@ -36,19 +36,23 @@ pip install -r requirements.txt
 
 ## Usage
 
-The script is run from the command line with various arguments. Libation example:
+The script can be run from the command line with various arguments or using a YAML configuration file. Here are examples for both methods:
+
+### Command Line Usage
+
+Libation example:
 
 ```bash
 python openaudible_to_ab.py \
   --server-url "http://audiobooks.example.com" \
-  --api-token "YOUR_API_TOKEN" \
+  --abs-api-token "YOUR_API_TOKEN" \
   --library-id "1cc175ca-88b9-4910-abe5-bf10b8aaa702" \
-  --books-json "~/Libation/books.json" \
-  --source-dir "~/Libation/Books/" \
-  --dest-dir "/AudioBookShelf/library1" \
-  --log-file "/tmp/openaudible_to_ab.log" \
-  --file-ext ".m4b" \
-  --days 7 \
+  --books-json-path "~/Libation/books.json" \
+  --source-audio-book-directory "~/Libation/Books/" \
+  --destination-book-directory "/AudioBookShelf/library1" \
+  --log-file-path "/tmp/openaudible_to_ab.log" \
+  --audio-file-extension ".m4b" \
+  --purchased-how-long-ago 7 \
   --download-program "Libation" \
   --libation-folder-cleanup True
 ```
@@ -57,48 +61,49 @@ OpenAudible Example:
 ```
 python openaudible_to_ab.py \
   --server-url "http://audiobooks.example.com" \
-  --api-token "YOUR_API_TOKEN" \
+  --abs-api-token "YOUR_API_TOKEN" \
   --library-id "1cc175ca-88b9-4910-abe5-bf10b8aaa702" \
-  --books-json "~/OpenAudible/books.json" \
-  --source-dir "~/OpenAudible/books/" \
-  --dest-dir "/AudioBookShelf/library1" \
-  --log-file "/tmp/openaudible_to_ab.log" \
-  --file-ext ".m4b" \
-  --days 7 \
-  --download-program "OpenAudible" 
+  --books-json-path "~/OpenAudible/books.json" \
+  --source-audio-book-directory "~/OpenAudible/books/" \
+  --destination-book-directory "/AudioBookShelf/library1" \
+  --log-file-path "/tmp/openaudible_to_ab.log" \
+  --audio-file-extension ".m4b" \
+  --purchased-how-long-ago 7 \
+  --download-program "OpenAudible"
 ```
 
 > [!NOTE]
 > There is an example YAML file `arguments.yaml` which is included in the repo.
-> Currently the YAML looks slightly different than the CLI arguments because of the way
-> I chose to rename the arguments internal to the script. This file currently looks like:
+>This file currently looks like:
 > ```
->   api-token: ""
->  books-json: ""
->  purchased_how_long_ago: 0
->  destination_book_directory: "/tmp/books/"
->  download-program: OpenAudible
->  audio_file_extension: ".m4b"
->  libation-folder-cleanup: False
->  library-id: ""
->  log-file: "/tmp/book_processing.txt"
->  server-url: ""
->  source_audio_book_directory: ""
+> abs-api-token: ""
+> books-json-path: ""
+> purchased-how-long-ago: 0
+> destination-book-directory: "/tmp/books/"
+> download-program: OpenAudible
+> audio-file-extension: ".m4b"
+> libation-folder-cleanup: False
+> library-id: ""
+> log-file-path: "/tmp/book_processing.txt"
+> server-url: ""
+> source-audio-book-directory: ""
 >```
 
 ## Arguments
 
-* **--api-token:** Your AudioBookShelf API token.
-* **--books-json:** Path to the JSON file exported from OpenAudible or Libation containing book information.
-* **--days:** Number of days to look back for recently purchased books (defaults to 7).
-* **--dest-dir:** The destination directory where you want to organize your audiobooks.
+* **--abs-api-token:** Your AudioBookShelf API token.
+* **--books-json-path:** Path to the JSON file exported from OpenAudible or Libation containing book information.
+* **--purchased-how-long-ago:** Number of days to look back for recently purchased books (defaults to 7).
+* **--destination-book-directory:** The destination directory where you want to organize your audiobooks.
 * **--download-program:** Specify the download program - OpenAudible or Libation (defaults to OpenAudible).
-* **--file-ext:** Audio file extension (defaults to .m4b).
+* **--audio-file-extension:** Audio file extension (defaults to .m4b).
 * **--libation-folder-cleanup:** Whether to delete the source folder in Libation directory after processing (defaults to False).
 * **--library-id:** The ID of your library in AudioBookShelf.
-* **--log-file:** Path to the log file.
+* **--log-file-path:** Path to the log file.
 * **--server-url:** The base URL of your AudioBookShelf instance.
-* **--source-dir:** The directory where your download program saves audiobook files.
+* **--source-audio-book-directory:** The directory where your download program saves audiobook files.
+* **--generate-yaml:** This option writes your current flag choices to a YAML file _without_ running the program.
+* **--yaml:** Path to YAML configuration file.
 
 ## Workflow
 
@@ -111,7 +116,7 @@ python openaudible_to_ab.py \
 > ```
 > In the future this may be done automatically for you
  
-2. **Configuration:** Set the required command-line arguments.
+2. **Configuration:** Set the required command-line arguments or use a YAML configuration file.
 3. **Execution:** Run the script. It will:
    * Process books purchased within the specified timeframe
    * Move audiobook files to the organized directory structure
