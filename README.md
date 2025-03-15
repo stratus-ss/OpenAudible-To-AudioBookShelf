@@ -76,17 +76,17 @@ python openaudible_to_ab.py \
 > There is an example YAML file `arguments.yaml` which is included in the repo.
 >This file currently looks like:
 > ```
-> abs-api-token: ""
-> books-json-path: ""
-> purchased-how-long-ago: 0
-> destination-book-directory: "/tmp/books/"
-> download-program: OpenAudible
-> audio-file-extension: ".m4b"
-> libation-folder-cleanup: False
-> library-id: ""
-> log-file-path: "/tmp/book_processing.txt"
-> server-url: ""
-> source-audio-book-directory: ""
+  abs-api-token: ""
+>  books-json: ""
+>  purchased_how_long_ago: 0
+>  destination_book_directory: ""
+>  download-program: OpenAudible
+>  audio_file_extension: ".m4b"
+>  libation-folder-cleanup: False
+>  library-id: ""
+>  log-file: ""
+>  server-url: "http://example.com"
+>  source_audio_book_directory: "/tmp/OpenAudible/books"
 >```
 
 ## Arguments
