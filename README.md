@@ -76,7 +76,7 @@ python openaudible_to_ab.py \
 > There is an example YAML file `arguments.yaml` which is included in the repo.
 >This file currently looks like:
 > ```
-  abs-api-token: ""
+>  abs-api-token: ""
 >  books-json: ""
 >  purchased_how_long_ago: 0
 >  destination_book_directory: ""
