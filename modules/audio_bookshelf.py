@@ -124,7 +124,7 @@ def process_audio_books(
         results.append(output.json())
         if output.ok:
             log_file.write(
-                f"Finished Matching {item["media"]["metadata"]["title"]} using the Audible Provider"
+                f'Finished Matching {item["media"]["metadata"]["title"]} using the Audible Provider'
             )
             subprocess.run(
                 [
