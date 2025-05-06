@@ -158,6 +158,11 @@ def move_audio_book_files(
                 audio_book_destination_dir, audio_file_name
             )
 
+            print(f"Processing: {book_data['title']}")
+
+            log_file.write(
+                f"{datetime.now()} - INFO - Processing: {book_data['title']}\n"
+            )
             if os.path.exists(target_audio_file_path):
                 existing_file_size = os.path.getsize(target_audio_file_path)
                 downloaded_file_size = os.path.getsize(downloaded_audio_file_path)
