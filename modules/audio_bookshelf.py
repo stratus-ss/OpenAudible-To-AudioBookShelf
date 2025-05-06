@@ -86,9 +86,9 @@ def get_audio_bookshelf_recent_books(
         recent_items = []
         for book in book_list:
             if log_file:
-                log_file.write(f"Fetching {book} information from Audio BookShelf\n")
+                log_file.write(f'Fetching {book["short_title"]} information from Audio BookShelf\n')
             for item in json_response.json()["results"]:
-                if book["title"] in item["media"]["metadata"]["title"]:
+                if book["short_title"] in item["media"]["metadata"]["title"]:
                     # Update the nested 'asin' key with the book's asin
                     item["media"]["metadata"]["asin"] = book["asin"]
                     recent_items.append(item)

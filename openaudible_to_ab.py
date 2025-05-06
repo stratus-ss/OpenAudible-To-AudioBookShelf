@@ -179,7 +179,7 @@ def move_audio_book_files(
                         f"The downloaded file is larger ({downloaded_file_size}) than the existing file \
                             ({existing_file_size}).\n"
                     )
-            books_to_process_in_audio_bookself.append(book_data["short_title"])
+            books_to_process_in_audio_bookself.append(book_data)
             if os.path.exists(downloaded_audio_file_path):
                 shutil.move(downloaded_audio_file_path, audio_book_destination_dir)
             if libation_folder_cleanup:
