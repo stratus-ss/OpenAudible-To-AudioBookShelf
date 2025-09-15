@@ -3,3 +3,6 @@
 # Exclude all markdown files except README.md
 *.md
 !README.md
+
+# Exclude sample_files directory (contains private testing files)
+sample_files/
