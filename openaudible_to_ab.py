@@ -5,12 +5,8 @@ import shutil
 import time
 from datetime import datetime, timedelta, timezone
 
-from modules.audio_bookshelf import (
-    get_all_books,
-    get_audio_bookshelf_recent_books,
-    process_audio_books,
-    scan_library_for_books,
-)
+from modules.audio_bookshelf import (get_all_books, get_audio_bookshelf_recent_books, process_audio_books,
+                                     scan_library_for_books)
 from modules.config import Config
 from modules.utils import _parse_date, make_directory_structure, sanitize_name
 
@@ -62,9 +58,7 @@ def process_libation_book_json(book_data: dict) -> dict:
         else book_data.get("Title")
     )
 
-    series_sequence = (
-        book_data.get("SeriesOrder").split()[0] if book_data.get("SeriesOrder") else ""
-    )
+    series_sequence = book_data.get("SeriesOrder").split()[0] if book_data.get("SeriesOrder") else ""
 
     filename = (
         f"{book_data.get('Title')}: {book_data.get('Subtitle')} [{book_data.get('AudibleProductId')}]"
@@ -72,7 +66,10 @@ def process_libation_book_json(book_data: dict) -> dict:
         else f"{book_data.get('Title')} [{book_data.get('AudibleProductId')}]"
     )
 
-    book_folder = f"{book_data.get('Title')} [{book_data.get('AudibleProductId')}]"
+    # Libation creates directory names using only the part before the first colon
+    # e.g., "Disney Agent Stitch: The M-Files" becomes "Disney Agent Stitch [ASIN]"
+    title_for_folder = book_data.get("Title").split(":")[0].strip()
+    book_folder = f"{title_for_folder} [{book_data.get('AudibleProductId')}]"
     purchase_date = book_data.get("DateAdded")
     # Split on timezone offset indicator and take the first part
     formatted_purchase_date = _parse_date(purchase_date)
@@ -94,6 +91,7 @@ def process_libation_book_json(book_data: dict) -> dict:
 def move_audio_book_files(
     audio_file_extension: str,
     books_json_path: str,
+    copy_instead_of_move: bool,
     destination_dir: str,
     download_program: str,
     libation_folder_cleanup: bool,
@@ -116,9 +114,7 @@ def move_audio_book_files(
     if purchased_how_long_ago == 0:
         target_date = (datetime.now(timezone.utc) - timedelta(days=9125)).date()
     else:
-        target_date = (
-            datetime.now(timezone.utc) - timedelta(days=purchased_how_long_ago)
-        ).date()
+        target_date = (datetime.now(timezone.utc) - timedelta(days=purchased_how_long_ago)).date()
     books_to_process_in_audio_bookself = []
     for book in books:
         try:
@@ -128,70 +124,61 @@ def move_audio_book_files(
                 book_data = process_libation_book_json(book)
                 # Need to override the source_dir as Libation puts
                 # Books/{book_title}/filename
-                libation_source_dir = (
-                    source_dir + os.sep + book_data["libation_book_folder"]
-                )
+                libation_source_dir = source_dir + os.sep + book_data["libation_book_folder"]
             purchase_date = book_data["purchase_date"]
             # we don't want to process books in the library older than a specific date
             # it's too intensive
             if datetime.strptime(purchase_date, "%Y-%m-%d").date() < target_date:
                 continue
             author_dir = sanitize_name(book_data["author"])
-            series_dir = (
-                sanitize_name(book_data["series"]) if book_data["series"] else ""
-            )
+            series_dir = sanitize_name(book_data["series"]) if book_data["series"] else ""
             book_title_dir = sanitize_name(book_data["title"])
             audio_file_name = book_data["filename"] + audio_file_extension
             if download_program == "OpenAudible":
                 downloaded_audio_file_path = os.path.join(source_dir, audio_file_name)
             else:
-                downloaded_audio_file_path = os.path.join(
-                    libation_source_dir, audio_file_name
-                )
+                downloaded_audio_file_path = os.path.join(libation_source_dir, audio_file_name)
 
             if not (os.path.exists(downloaded_audio_file_path)):
                 continue
             audio_book_destination_dir = make_directory_structure(
                 author_dir, series_dir, book_title_dir, destination_dir
             )
-            target_audio_file_path = os.path.join(
-                audio_book_destination_dir, audio_file_name
-            )
+            target_audio_file_path = os.path.join(audio_book_destination_dir, audio_file_name)
 
             if os.path.exists(target_audio_file_path):
                 existing_file_size = os.path.getsize(target_audio_file_path)
                 downloaded_file_size = os.path.getsize(downloaded_audio_file_path)
                 if downloaded_file_size < existing_file_size:
-                    log_file.write(
-                        f"{datetime.now()} - INFO - No change for book: {book_data['title']}\n"
-                    )
+                    log_file.write(f"{datetime.now()} - INFO - No change for book: {book_data['title']}\n")
                     continue
                 else:
-                    log_file.write(
-                        f"{book_data['title']} has an existing file but it will be replaced! \n"
-                    )
+                    log_file.write(f"{book_data['title']} has an existing file but it will be replaced! \n")
                     log_file.write(
                         f"The downloaded file is larger ({downloaded_file_size}) than the existing file \
                             ({existing_file_size}).\n"
                     )
-            books_to_process_in_audio_bookself.append(book_data["short_title"])
+                print(f"Processing: {book_data['title']}")
+                log_file.write(
+                f"{datetime.now()} - INFO - Processing: {book_data['title']}\n"
+                )
+            books_to_process_in_audio_bookself.append(book_data)
             if os.path.exists(downloaded_audio_file_path):
-                shutil.move(downloaded_audio_file_path, audio_book_destination_dir)
-            if libation_folder_cleanup:
+                if copy_instead_of_move:
+                    shutil.copy2(downloaded_audio_file_path, audio_book_destination_dir)
+                    action = "copied"
+                else:
+                    shutil.move(downloaded_audio_file_path, audio_book_destination_dir)
+                    action = "moved"
+            if libation_folder_cleanup and not copy_instead_of_move:
                 shutil.rmtree(libation_source_dir)
             log_file.write(
-                f"{datetime.now()} - INFO - Processed and moved files for book: {book_data['title']} under \
+                f"{datetime.now()} - INFO - Processed and {action} files for book: {book_data['title']} under \
                     '{author_dir}/{series_dir}'\n"
             )
         except Exception as e:
-            error_title = (
-                book_data.get("title", "Unknown Book")
-                if "book_data" in locals()
-                else "Unknown Book"
-            )
-            log_file.write(
-                f"{datetime.now()} - ERROR - An error occurred while processing {error_title}: {e}\n"
-            )
+            error_title = book_data.get("title", "Unknown Book") if "book_data" in locals() else "Unknown Book"
+            log_file.write(f"{datetime.now()} - ERROR - An error occurred while processing {error_title}: {e}\n")
 
     return books_to_process_in_audio_bookself
 
@@ -213,6 +200,7 @@ def main(*args: str):
     book_list = move_audio_book_files(
         args.audio_file_extension,
         args.books_json_path,
+        args.copy_instead_of_move,
         args.destination_book_directory,
         args.download_program,
         args.libation_folder_cleanup,
@@ -222,27 +210,21 @@ def main(*args: str):
     )
 
     # Now that the files have been moved, we want to kick off the AudioBookShelf scanner
-    scan_library_for_books(
-        args.server_url, args.library_id, args.abs_api_token, log_file
-    )
+    scan_library_for_books(args.server_url, args.library_id, args.abs_api_token, log_file)
 
     # We often need a back-off time in order to allow the scan to complete
     time.sleep(15)
 
     # Sometimes the scanner does not identify the books correctly
     # In my case I buy books from audible so I want to force the match with audible content
-    books_from_audiobookshelf = get_all_books(
-        args.server_url, args.library_id, args.abs_api_token, log_file
-    )
+    books_from_audiobookshelf = get_all_books(args.server_url, args.library_id, args.abs_api_token, log_file)
     most_recent_books = get_audio_bookshelf_recent_books(
         books_from_audiobookshelf,
         log_file,
         days_ago=args.purchased_how_long_ago,
         book_list=book_list,
     )
-    _ = process_audio_books(
-        most_recent_books, args.server_url, args.abs_api_token, log_file
-    )
+    _ = process_audio_books(most_recent_books, args.server_url, args.abs_api_token, log_file)
     log_file.close()
 
 

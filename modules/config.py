@@ -76,6 +76,14 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--copy-instead-of-move",
+        dest="copy_instead_of_move",
+        default=False,
+        action="store_true",
+        help="Copy files instead of moving them (useful for debugging/testing)",
+    )
+
+    parser.add_argument(
         "--libation-folder-cleanup",
         dest="libation_folder_cleanup",
         type=bool,

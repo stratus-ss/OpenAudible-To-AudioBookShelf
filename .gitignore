@@ -1,0 +1,304 @@
+# ===========================
+# Sensitive & Secret Files
+# ===========================
+# API Keys and Tokens
+api_key.txt
+api_keys.txt
+api_token.txt
+*.key
+*.pem
+*.p12
+*.pfx
+*_key.txt
+*_token.txt
+*_secret.txt
+
+# Credentials
+credentials.txt
+credentials.json
+secrets.txt
+secrets.json
+secret.txt
+password.txt
+passwords.txt
+.credentials
+.secrets
+
+# Environment & Configuration
+.env
+.env.*
+!.env.example
+!.env.template
+*.env
+*.env.local
+*.env.production
+*.env.development
+*.env.staging
+config.ini
+config.yaml
+config.yml
+local_config.*
+*_config.local.*
+.vscode/launch.json
+
+# SSH Keys
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.ppk
+
+# ===========================
+# Python
+# ===========================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# ===========================
+# IDEs and Editors
+# ===========================
+# VS Code
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/extensions.json
+.vscode/*.code-snippets
+.history/
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+.netrwhist
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# ===========================
+# Operating System Files
+# ===========================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# ===========================
+# Logs and Databases
+# ===========================
+*.log
+*.sql
+*.sqlite
+*.sqlite3
+*.db
+logs/
+log/
+
+# ===========================
+# Temporary and Backup Files
+# ===========================
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
+*~
+
+# ===========================
+# Project Specific
+# ===========================
+# Audio book files (if you don't want to commit them)
+*.m4b
+*.m4a
+*.mp3
+*.aax
+*.aa
+
+# JSON files that might contain sensitive data
+# Uncomment if your books.json contains sensitive info
+# books.json
+# *_books.json
+
+# Test output files
+/tmp/
+test_output/
+*.test
+
+# Documentation builds
+docs/build/
+docs/_build/
+
+# Downloaded or generated data
+data/
+downloads/
+
