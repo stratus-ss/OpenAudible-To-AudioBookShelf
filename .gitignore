@@ -40,6 +40,8 @@ config.yml
 local_config.*
 *_config.local.*
 .vscode/launch.json
+libation.json
+FileLocationsV2.json
 
 # SSH Keys
 id_rsa

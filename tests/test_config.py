@@ -289,6 +289,7 @@ def test_from_args(yaml_content, expected_attrs):
                 "audio_file_extension": ".m4b",
                 "copy_instead_of_move": False,
                 "libation_folder_cleanup": False,
+                "libation_file_locations_path": "",
                 "library_id": "123456",
                 "log_file_path": "/tmp/book_processing.txt",
                 "server_url": "http://example.com",

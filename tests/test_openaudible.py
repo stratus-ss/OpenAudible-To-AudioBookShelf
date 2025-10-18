@@ -69,4 +69,4 @@ def test_open_audible_processing(setup_test_environment):
         / "sample_book.m4b"
     )
     assert expected_path.exists()
-    assert "Sample Book" in result[0]['title']
+    assert "Sample Book" in result[0]["title"]

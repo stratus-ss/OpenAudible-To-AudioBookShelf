@@ -35,7 +35,7 @@ def process_open_audible_book_json(book_data: dict) -> dict:
     }
 
 
-def process_libation_book_json(book_data: dict) -> dict:
+def process_libation_book_json(book_data: dict, file_locations: dict = None) -> dict:
     """
     Map the keys of the libation data dictionary to a standardized format.
     Libation has the following relevent keys:
@@ -44,10 +44,12 @@ def process_libation_book_json(book_data: dict) -> dict:
     'LengthInMinutes', 'Locale', 'NarratorNames', 'Publisher', 'SeriesNames', 'SeriesOrder',
     'Subtitle', 'Title'
 
-    NOTE: file path/name are not included in Libation's generic info. We need to construct it
+    NOTE: file path/name can be extracted from FileLocationsV2.json if provided,
+    otherwise we construct it from the book metadata.
 
     Args:
         book_data (dict): The input dictionary containing book information.
+        file_locations (dict): Optional FileLocationsV2.json data to extract file paths.
 
     Returns:
         dict: A new dictionary with standardized key-value pairs.
@@ -66,26 +68,39 @@ def process_libation_book_json(book_data: dict) -> dict:
         else f"{book_data.get('Title')} [{book_data.get('AudibleProductId')}]"
     )
 
-    # Libation creates directory names using only the part before the first colon
-    # e.g., "Disney Agent Stitch: The M-Files" becomes "Disney Agent Stitch [ASIN]"
-    title_for_folder = book_data.get("Title").split(":")[0].strip()
-    book_folder = f"{title_for_folder} [{book_data.get('AudibleProductId')}]"
     purchase_date = book_data.get("DateAdded")
-    # Split on timezone offset indicator and take the first part
     formatted_purchase_date = _parse_date(purchase_date)
 
-    return {
+    result = {
         "asin": book_data.get("AudibleProductId"),
         "author": book_data.get("AuthorNames"),
         "description": book_data.get("Description"),
         "filename": filename,
-        "libation_book_folder": book_folder,
         "purchase_date": formatted_purchase_date,
         "series": book_data.get("SeriesNames", ""),
         "short_title": book_data.get("Title"),
         "title": full_title,
         "volumeNumber": series_sequence,
     }
+
+    # Extract file path from FileLocationsV2.json if available
+    if file_locations and "Dictionary" in file_locations:
+        asin = book_data.get("AudibleProductId")
+        if asin in file_locations["Dictionary"]:
+            # Find the entry with FileType 1 (actual audio book file)
+            for location in file_locations["Dictionary"][asin]:
+                if location.get("FileType") == 1:
+                    result["file_path"] = location["Path"]["Path"]
+                    break
+
+    # If no file path was found in FileLocationsV2.json, construct it the old way
+    if "file_path" not in result:
+        # Libation creates directory names using only the part before the first colon
+        title_for_folder = book_data.get("Title").split(":")[0].strip()
+        book_folder = f"{title_for_folder} [{book_data.get('AudibleProductId')}]"
+        result["libation_book_folder"] = book_folder
+
+    return result
 
 
 def move_audio_book_files(
@@ -98,9 +113,25 @@ def move_audio_book_files(
     log_file,
     purchased_how_long_ago: int,
     source_dir: str,
+    libation_file_locations_path: str = "",
 ) -> list:
     """
     This function reads the books JSON file, processes each book, and logs the results.
+
+    Args:
+        audio_file_extension: File extension for audio books (e.g., '.m4b')
+        books_json_path: Path to the books JSON file
+        copy_instead_of_move: If True, copy files instead of moving them
+        destination_dir: Destination directory for organized books
+        download_program: Either 'OpenAudible' or 'Libation'
+        libation_folder_cleanup: If True, delete source folders after moving
+        log_file: File handle for logging
+        purchased_how_long_ago: Process books purchased within this many days
+        source_dir: Source directory containing audio book files
+        libation_file_locations_path: Optional path to Libation's FileLocationsV2.json
+
+    Returns:
+        list: List of processed books
     """
     try:
         with open(books_json_path, "r") as file:
@@ -109,6 +140,16 @@ def move_audio_book_files(
 
         log_file.write(f"{datetime.now()} - Error reading JSON file: {e}")
         exit(1)
+
+    # Load file locations if provided (for Libation)
+    file_locations = None
+    if libation_file_locations_path and os.path.exists(libation_file_locations_path):
+        try:
+            with open(libation_file_locations_path, "r") as file:
+                file_locations = json.load(file)
+        except (IOError, json.JSONDecodeError) as e:
+            log_file.write(f"{datetime.now()} - Warning: Could not read FileLocationsV2.json: {e}\n")
+            log_file.write(f"{datetime.now()} - Will use constructed paths instead\n")
     # If set to zero go back in time as a way to say go back infinity
     # 9125 days is 25 years
     if purchased_how_long_ago == 0:
@@ -121,10 +162,8 @@ def move_audio_book_files(
             if download_program == "OpenAudible":
                 book_data = process_open_audible_book_json(book)
             else:
-                book_data = process_libation_book_json(book)
-                # Need to override the source_dir as Libation puts
-                # Books/{book_title}/filename
-                libation_source_dir = source_dir + os.sep + book_data["libation_book_folder"]
+                book_data = process_libation_book_json(book, file_locations)
+
             purchase_date = book_data["purchase_date"]
             # we don't want to process books in the library older than a specific date
             # it's too intensive
@@ -134,10 +173,19 @@ def move_audio_book_files(
             series_dir = sanitize_name(book_data["series"]) if book_data["series"] else ""
             book_title_dir = sanitize_name(book_data["title"])
             audio_file_name = book_data["filename"] + audio_file_extension
+
             if download_program == "OpenAudible":
                 downloaded_audio_file_path = os.path.join(source_dir, audio_file_name)
             else:
-                downloaded_audio_file_path = os.path.join(libation_source_dir, audio_file_name)
+                # Use file_path from FileLocationsV2.json if available
+                if "file_path" in book_data:
+                    downloaded_audio_file_path = book_data["file_path"]
+                    # Extract the directory for cleanup purposes
+                    libation_source_dir = os.path.dirname(downloaded_audio_file_path)
+                else:
+                    # Fall back to constructed path
+                    libation_source_dir = source_dir + os.sep + book_data["libation_book_folder"]
+                    downloaded_audio_file_path = os.path.join(libation_source_dir, audio_file_name)
 
             if not (os.path.exists(downloaded_audio_file_path)):
                 continue
@@ -159,9 +207,7 @@ def move_audio_book_files(
                             ({existing_file_size}).\n"
                     )
                 print(f"Processing: {book_data['title']}")
-                log_file.write(
-                f"{datetime.now()} - INFO - Processing: {book_data['title']}\n"
-                )
+                log_file.write(f"{datetime.now()} - INFO - Processing: {book_data['title']}\n")
             books_to_process_in_audio_bookself.append(book_data)
             if os.path.exists(downloaded_audio_file_path):
                 if copy_instead_of_move:
@@ -207,6 +253,7 @@ def main(*args: str):
         log_file,
         args.purchased_how_long_ago,
         args.source_audio_book_directory,
+        args.libation_file_locations_path,
     )
 
     # Now that the files have been moved, we want to kick off the AudioBookShelf scanner

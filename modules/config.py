@@ -92,6 +92,14 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--libation-file-locations-path",
+        dest="libation_file_locations_path",
+        type=str,
+        default="",
+        help="Path to Libation's FileLocationsV2.json file (optional, uses constructed paths if not provided)",
+    )
+
+    parser.add_argument(
         "--library-id",
         dest="library_id",
         type=str,
