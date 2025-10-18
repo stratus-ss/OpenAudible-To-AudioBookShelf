@@ -1,14 +1,11 @@
-import pytest
 import json
 import os
+from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from modules.utils import sanitize_name
-from datetime import datetime, timedelta, timezone
-from openaudible_to_ab import (
-    move_audio_book_files,
-    make_directory_structure,
-    process_open_audible_book_json,
-)
+from openaudible_to_ab import make_directory_structure, move_audio_book_files, process_open_audible_book_json
 
 
 @pytest.fixture
@@ -35,9 +32,7 @@ def setup_test_environment(tmp_path):
                 "title": "Old Book",
                 "asin": "OLD789",
                 "filename": "old_book",
-                "purchase_date": (datetime.now(timezone.utc) - timedelta(days=10))
-                .date()
-                .isoformat(),
+                "purchase_date": (datetime.now(timezone.utc) - timedelta(days=10)).date().isoformat(),
             }
         ),
         (
@@ -46,9 +41,7 @@ def setup_test_environment(tmp_path):
                 "title": "New Book",
                 "asin": "NEW456",
                 "filename": "new_book",
-                "purchase_date": (datetime.now(timezone.utc) - timedelta(days=5))
-                .date()
-                .isoformat(),
+                "purchase_date": (datetime.now(timezone.utc) - timedelta(days=5)).date().isoformat(),
             }
         ),
     ],
@@ -57,15 +50,12 @@ def test_date_filtering(setup_test_environment, test_data):
 
     args = {
         "audio_file_extension": ".m4b",
-        "books_json_path": os.path.join(
-            setup_test_environment["tmp_path"], "books.json"
-        ),
+        "books_json_path": os.path.join(setup_test_environment["tmp_path"], "books.json"),
+        "copy_instead_of_move": False,
         "destination_dir": setup_test_environment["dest_dir"],
         "download_program": "OpenAudible",
         "libation_folder_cleanup": False,
-        "log_file": open(
-            os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"
-        ),
+        "log_file": open(os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"),
         "purchased_how_long_ago": 7,
         "source_dir": setup_test_environment["source_dir"],
     }
@@ -93,15 +83,12 @@ def test_existing_file_handling(setup_test_environment, test_data):
     # Create test data with different file sizes
     args = {
         "audio_file_extension": ".m4b",
-        "books_json_path": os.path.join(
-            setup_test_environment["tmp_path"], "books.json"
-        ),
+        "books_json_path": os.path.join(setup_test_environment["tmp_path"], "books.json"),
+        "copy_instead_of_move": False,
         "destination_dir": setup_test_environment["dest_dir"],
         "download_program": "OpenAudible",
         "libation_folder_cleanup": False,
-        "log_file": open(
-            os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"
-        ),
+        "log_file": open(os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"),
         "purchased_how_long_ago": 7,
         "source_dir": setup_test_environment["source_dir"],
     }
@@ -110,9 +97,7 @@ def test_existing_file_handling(setup_test_environment, test_data):
         json.dump([test_data], f)
 
     # Create source file
-    source_path = os.path.join(
-        setup_test_environment["source_dir"], f"{test_data['filename']}.m4b"
-    )
+    source_path = os.path.join(setup_test_environment["source_dir"], f"{test_data['filename']}.m4b")
     with open(source_path, "wb") as f:
         f.write(b"smaller file")  # 12 bytes
 
@@ -144,12 +129,11 @@ def test_error_handling(setup_test_environment, invalid_input):
         move_audio_book_files(
             audio_file_extension=".m4b",
             books_json_path=invalid_input[0],
+            copy_instead_of_move=False,
             destination_dir=setup_test_environment["dest_dir"],
             download_program="OpenAudible",
             libation_folder_cleanup=False,
-            log_file=open(
-                os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"
-            ),
+            log_file=open(os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"),
             purchased_how_long_ago=7,
             source_dir=setup_test_environment["source_dir"],
         )
@@ -180,9 +164,7 @@ def test_sanitize_name(text, expected_transformed_text):
         )
     ],
 )
-def test_make_directory_structure(
-    author: str, series: str, title: str, abs_folder: str, expected_dir: str
-):
+def test_make_directory_structure(author: str, series: str, title: str, abs_folder: str, expected_dir: str):
     output = make_directory_structure(author, series, title, abs_folder)
     assert output == expected_dir
     assert os.path.exists(output)

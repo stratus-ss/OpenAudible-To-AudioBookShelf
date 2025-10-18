@@ -1,12 +1,11 @@
-import pytest
 import json
 import os
-
-from pathlib import Path
 from datetime import datetime, timezone
-from openaudible_to_ab import (
-    move_audio_book_files,
-)
+from pathlib import Path
+
+import pytest
+
+from openaudible_to_ab import move_audio_book_files
 
 
 @pytest.fixture
@@ -51,13 +50,28 @@ def setup_test_environment(tmp_path):
             ],
             "Another_Author/Another_Book/Another Book [LIB789].m4b",
         ),
+        # Test case for titles with colons: Libation creates folders with truncated names
+        # but files keep the full title (e.g., "Disney Agent Stitch: The M-Files")
+        (
+            [
+                {
+                    "AudibleProductId": "DISNEY123",
+                    "AuthorNames": "Disney Author",
+                    "Title": "Disney Agent Stitch: The M-Files",
+                    "DateAdded": datetime.now(timezone.utc).isoformat(),
+                }
+            ],
+            "Disney_Author/Disney_Agent_Stitch_The_MFiles/Disney Agent Stitch: The M-Files [DISNEY123].m4b",
+        ),   
     ],
 )
 def test_libation_processing(setup_test_environment, test_books, expected_path_suffix):
     source_dir = Path(setup_test_environment["source_dir"])
     # Dynamically create subfolders and files based on test data
     for book in test_books:
-        book_folder_name = f"{book['Title']} [{book['AudibleProductId']}]"
+        # Libation creates folder names using only the part before the first colon
+        title_for_folder = book['Title'].split(':')[0].strip()
+        book_folder_name = f"{title_for_folder} [{book['AudibleProductId']}]"
         source_dir_with_subfolder = source_dir / book_folder_name
         os.makedirs(source_dir_with_subfolder)
 
@@ -75,6 +89,7 @@ def test_libation_processing(setup_test_environment, test_books, expected_path_s
     args = {
         "audio_file_extension": ".m4b",
         "books_json_path": Path(setup_test_environment["tmp_path"]) / "books.json",
+        "copy_instead_of_move": False,
         "destination_dir": setup_test_environment["dest_dir"],
         "download_program": "Libation",
         "libation_folder_cleanup": True,
@@ -83,14 +98,13 @@ def test_libation_processing(setup_test_environment, test_books, expected_path_s
         "source_dir": str(source_dir),
     }
 
-    with open(
-        args["books_json_path"], "w"
-    ) as f:  # Use 'w' to overwrite for each test case
+    with open(args["books_json_path"], "w") as f:  # Use 'w' to overwrite for each test case
         json.dump(test_books, f)
 
     result = move_audio_book_files(**args)
+    print(result)
     args["log_file"].close()
 
     expected_path = Path(args["destination_dir"]) / expected_path_suffix
     assert expected_path.exists()
-    assert test_books[0]["Title"] in result
+    assert test_books[0]["Title"] in result[0]['title']

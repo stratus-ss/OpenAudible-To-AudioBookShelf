@@ -1,12 +1,13 @@
-import tempfile
 import logging
-from pathlib import Path
 import sys
-from modules.config import Config
+import tempfile
 from collections.abc import Generator
+from pathlib import Path
 
 import pytest
 import yaml
+
+from modules.config import Config
 
 
 @pytest.fixture
@@ -65,23 +66,17 @@ def test_yaml_load(config_dict: dict, yaml_config: str) -> None:
     assert_config_correct(config_dict, config_obj)
 
 
-def test_yaml_load_file_not_found(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_yaml_load_file_not_found(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     yamlfile = str(tmp_path / "config.yaml")
     config_obj = Config(yaml=yamlfile)
 
     with pytest.raises(SystemExit):
         config_obj._load_yaml()
 
-    assert caplog.record_tuples == [
-        ("modules.config", logging.CRITICAL, "YAML file not found: %s" % yamlfile)
-    ]
+    assert caplog.record_tuples == [("modules.config", logging.CRITICAL, "YAML file not found: %s" % yamlfile)]
 
 
-def test_yaml_load_invalid_file(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_yaml_load_invalid_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     yamlfile = str(tmp_path / "config.yaml")
     with open(yamlfile, "w") as file:
         file.write("value: !invalid\n")
@@ -90,9 +85,7 @@ def test_yaml_load_invalid_file(
     with pytest.raises(SystemExit):
         config_obj._load_yaml()
 
-    assert caplog.record_tuples == [
-        ("modules.config", logging.CRITICAL, "Error parsing YAML file")
-    ]
+    assert caplog.record_tuples == [("modules.config", logging.CRITICAL, "Error parsing YAML file")]
 
 
 def test_cli_yaml_and_args(
@@ -294,6 +287,7 @@ def test_from_args(yaml_content, expected_attrs):
                 "destination_book_directory": "/tmp/ABS/books",
                 "download_program": "OpenAudible",
                 "audio_file_extension": ".m4b",
+                "copy_instead_of_move": False,
                 "libation_folder_cleanup": False,
                 "library_id": "123456",
                 "log_file_path": "/tmp/book_processing.txt",

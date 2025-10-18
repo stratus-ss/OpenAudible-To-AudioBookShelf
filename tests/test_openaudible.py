@@ -1,11 +1,10 @@
-import pytest
 import json
-
-from pathlib import Path
 from datetime import datetime, timezone
-from openaudible_to_ab import (
-    move_audio_book_files,
-)
+from pathlib import Path
+
+import pytest
+
+from openaudible_to_ab import move_audio_book_files
 
 
 @pytest.fixture
@@ -46,6 +45,7 @@ def test_open_audible_processing(setup_test_environment):
     args = {
         "audio_file_extension": ".m4b",
         "books_json_path": Path(setup_test_environment["tmp_path"]) / "books.json",
+        "copy_instead_of_move": False,
         "destination_dir": setup_test_environment["dest_dir"],
         "download_program": "OpenAudible",
         "libation_folder_cleanup": False,
@@ -69,4 +69,4 @@ def test_open_audible_processing(setup_test_environment):
         / "sample_book.m4b"
     )
     assert expected_path.exists()
-    assert "Sample Book" in result
+    assert "Sample Book" in result[0]['title']

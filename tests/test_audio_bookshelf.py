@@ -1,12 +1,10 @@
-from datetime import datetime, timezone, timedelta
-import requests
+from datetime import datetime, timedelta, timezone
+
 import pytest
+import requests
 from requests.exceptions import HTTPError
 
-from modules.audio_bookshelf import (
-    get_all_books,
-    get_audio_bookshelf_recent_books,
-)
+from modules.audio_bookshelf import get_all_books, get_audio_bookshelf_recent_books
 
 
 @pytest.fixture
@@ -32,9 +30,7 @@ def setup_test_environment(tmp_path):
         ("http://abs.example.com", "invalid_library_id", "asdflkjanelw123", None, 404),
     ],
 )
-def test_scan_library_for_books(
-    server_url, library_id, abs_api_token, query_params, expected_status, mocker
-):
+def test_scan_library_for_books(server_url, library_id, abs_api_token, query_params, expected_status, mocker):
     mock_post = mocker.patch("requests.post")
 
     mock_response = mocker.MagicMock()
@@ -176,17 +172,11 @@ TEST_DATA = [
         {
             "results": [
                 {
-                    "addedAt": int(
-                        (datetime.now(timezone.utc) - timedelta(days=1)).timestamp()
-                        * 1000
-                    ),
+                    "addedAt": int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp() * 1000),
                     "media": {"metadata": {"title": "Book 1"}},
                 },
                 {
-                    "addedAt": int(
-                        (datetime.now(timezone.utc) - timedelta(days=2)).timestamp()
-                        * 1000
-                    ),
+                    "addedAt": int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp() * 1000),
                     "media": {"metadata": {"title": "Book 2"}},
                 },
             ]
@@ -196,9 +186,7 @@ TEST_DATA = [
         [],
         [
             {
-                "addedAt": int(
-                    (datetime.now(timezone.utc) - timedelta(days=1)).timestamp() * 1000
-                ),
+                "addedAt": int((datetime.now(timezone.utc) - timedelta(days=1)).timestamp() * 1000),
                 "media": {"metadata": {"title": "Book 1"}},
             }
         ],
@@ -211,10 +199,7 @@ TEST_DATA = [
                     "media": {"metadata": {"title": "Book 1"}},
                 },
                 {
-                    "addedAt": int(
-                        (datetime.now(timezone.utc) - timedelta(days=2)).timestamp()
-                        * 1000
-                    ),
+                    "addedAt": int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp() * 1000),
                     "media": {"metadata": {"title": "Book 2"}},
                 },
             ]
@@ -224,9 +209,7 @@ TEST_DATA = [
         [{"title": "Book 2", "asin": "asin2"}],
         [
             {
-                "addedAt": int(
-                    (datetime.now(timezone.utc) - timedelta(days=2)).timestamp() * 1000
-                ),
+                "addedAt": int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp() * 1000),
                 "media": {"metadata": {"title": "Book 2", "asin": "asin2"}},
             }
         ],
@@ -236,9 +219,7 @@ TEST_DATA = [
 ]
 
 
-@pytest.mark.parametrize(
-    "json_data, log_file, days_ago, book_list, expected_recent_items", TEST_DATA
-)
+@pytest.mark.parametrize("json_data, log_file, days_ago, book_list, expected_recent_items", TEST_DATA)
 def test_get_audio_bookshelf_recent_books(
     json_data, log_file, days_ago, book_list, expected_recent_items, tmp_path, mocker
 ):
@@ -247,8 +228,6 @@ def test_get_audio_bookshelf_recent_books(
     response.json.return_value = json_data
     log_file = tmp_path / "test.log"
     log_file.touch()
-    recent_items = get_audio_bookshelf_recent_books(
-        response, days_ago=days_ago, book_list=book_list
-    )
+    recent_items = get_audio_bookshelf_recent_books(response, days_ago=days_ago, book_list=book_list)
 
     assert recent_items == expected_recent_items
