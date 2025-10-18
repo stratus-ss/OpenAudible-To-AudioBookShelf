@@ -30,9 +30,7 @@ def _parse_date(date_str: str) -> str:
     return purchase_dt.strftime("%Y-%m-%d")
 
 
-def make_directory_structure(
-    author_dir: str, series_dir: str, book_title_dir: str, destination_dir: str
-) -> str:
+def make_directory_structure(author_dir: str, series_dir: str, book_title_dir: str, destination_dir: str) -> str:
     """
     Create a directory structure for organizing audio books.
 
@@ -47,12 +45,8 @@ def make_directory_structure(
     """
     audio_book_destination_dir = os.path.join(destination_dir, author_dir)
     if series_dir:
-        audio_book_destination_dir = os.path.join(
-            audio_book_destination_dir, series_dir
-        )
-    audio_book_destination_dir = os.path.join(
-        audio_book_destination_dir, book_title_dir
-    )
+        audio_book_destination_dir = os.path.join(audio_book_destination_dir, series_dir)
+    audio_book_destination_dir = os.path.join(audio_book_destination_dir, book_title_dir)
     if not os.path.exists(audio_book_destination_dir):
         os.makedirs(audio_book_destination_dir)
     return audio_book_destination_dir
@@ -70,7 +64,5 @@ def sanitize_name(name: str) -> str:
     """
     name_without_commas = name.replace(",", "")
     name_with_underscores = name_without_commas.replace(" ", "_")
-    sanitized = "".join(
-        [c for c in name_with_underscores if c.isalnum() or c in ("_", ".")]
-    )
+    sanitized = "".join([c for c in name_with_underscores if c.isalnum() or c in ("_", ".")])
     return sanitized.rstrip()
