@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from modules.audio_bookshelf import (get_all_books, get_audio_bookshelf_recent_books, process_audio_books,
                                      scan_library_for_books)
 from modules.config import Config
-from modules.utils import _parse_date, make_directory_structure, sanitize_name
+from modules.utils import _parse_date, generate_libation_json, make_directory_structure, sanitize_name
 
 
 def process_open_audible_book_json(book_data: dict) -> dict:
@@ -240,6 +240,37 @@ def main(*args: str):
     except IOError as e:
         print(f"Error opening log file: {e}")
         exit(1)
+
+    # Auto-generate libation.json if using Libation and the file doesn't exist
+    if args.download_program == "Libation" and not os.path.exists(args.books_json_path):
+        log_file.write(
+            f"{datetime.now()} - INFO - Libation JSON file not found at {args.books_json_path}. "
+            "Attempting to generate it...\n"
+        )
+        log_file.flush()
+
+        # If books_json_path is the default OpenAudible path, use source-audio-book-directory instead
+        if "OpenAudible" in args.books_json_path:
+            args.books_json_path = os.path.join(args.source_audio_book_directory, "libation.json")
+            log_file.write(
+                f"{datetime.now()} - INFO - Using source audio book directory for libation.json: "
+                f"{args.books_json_path}\n"
+            )
+            log_file.flush()
+
+        success = generate_libation_json(args.books_json_path, log_file)
+        if not success:
+            log_file.write(
+                f"{datetime.now()} - ERROR - Failed to generate libation.json. "
+                "Please generate it manually using: "
+                f"libationcli export --path {args.books_json_path} --json\n"
+            )
+            log_file.close()
+            print(
+                f"ERROR: Failed to auto-generate libation.json. "
+                f"Please run: libationcli export --path {args.books_json_path} --json"
+            )
+            exit(1)
 
     # This will process any files in the OpenAudible directory that is 7 days or newer
     # According to current date as compared to the purchase date

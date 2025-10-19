@@ -1,11 +1,29 @@
-abs_api_token: zzzz
-books_json_path: books.json
-purchased_how_long_ago: 0
-destination_book_directory: /tmp/ABS/books
-download_program: OpenAudible
-audio_file_extension: .m4b
-libation_folder_cleanup: true
-library_id: '123456'
-log_file_path: /tmp/book_processing.txt
-server_url: http://example.com
-source_audio_book_directory: /tmp/OpenAudible/books
+# OpenAudible to AudioBookShelf Configuration
+# Replace empty values with your actual configuration
+
+# AudioBookShelf server configuration
+server_url: "http://example.com"
+abs_api_token: ""
+library_id: ""
+
+# Book source configuration
+download_program: OpenAudible  # Options: OpenAudible or Libation
+books_json_path: ""  # Optional for Libation - will be auto-generated if not provided
+
+# Directory paths
+source_audio_book_directory: "/tmp/OpenAudible/books"
+destination_book_directory: ""
+
+# File handling options
+audio_file_extension: ".m4b"
+copy_instead_of_move: false  # Set to true for debugging/testing
+
+# Libation-specific options
+libation_folder_cleanup: false
+libation_file_locations_path: ""  # Optional - path to Libation's FileLocationsV2.json
+
+# Processing options
+purchased_how_long_ago: 7  # Number of days to look back (0 = all books)
+
+# Logging
+log_file_path: "/tmp/book_processing.txt"

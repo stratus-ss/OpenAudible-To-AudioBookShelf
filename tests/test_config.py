@@ -139,6 +139,7 @@ def assert_config_correct(config_dict: dict, config_obj: Config) -> None:
             [],
         ),
         # Invalid configuration: Missing all required fields → SystemExit and multiple critical log messages.
+        # Note: Order changed - books_json_path is now validated last due to special Libation handling
         (
             {},
             True,
@@ -147,11 +148,6 @@ def assert_config_correct(config_dict: dict, config_obj: Config) -> None:
                     "modules.config",
                     logging.CRITICAL,
                     "API token not specified in YAML or command line",
-                ),
-                (
-                    "modules.config",
-                    logging.CRITICAL,
-                    "Books JSON file not specified in YAML or command line",
                 ),
                 (
                     "modules.config",
@@ -172,6 +168,11 @@ def assert_config_correct(config_dict: dict, config_obj: Config) -> None:
                     "modules.config",
                     logging.CRITICAL,
                     "Source directory not specified in YAML or command line",
+                ),
+                (
+                    "modules.config",
+                    logging.CRITICAL,
+                    "Books JSON file not specified in YAML or command line",
                 ),
             ],
         ),
