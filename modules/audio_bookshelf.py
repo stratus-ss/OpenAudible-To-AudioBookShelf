@@ -117,7 +117,7 @@ def process_audio_books(todays_items: list[dict], server_url: str, abs_api_token
         )
         results.append(output.json())
         if output.ok:
-            log_file.write(f"Finished Matching {item["media"]["metadata"]["title"]} using the Audible Provider")
+            log_file.write(f"Finished Matching {item['media']['metadata']['title']} using the Audible Provider")
             subprocess.run(
                 [
                     "notify-send",

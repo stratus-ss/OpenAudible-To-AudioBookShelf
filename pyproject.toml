@@ -1,3 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openaudible-to-audiobookshelf"
+version = "1.0.0"
+description = "A tool to sync OpenAudible books to AudioBookShelf"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.8"
+dynamic = ["dependencies"]
+
+[tool.setuptools]
+packages = ["modules"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}
+
 [tool.pytest.ini_options]
 addopts = "--cov --cov-report term-missing"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
 
