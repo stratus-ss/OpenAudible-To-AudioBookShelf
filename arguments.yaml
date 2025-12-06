@@ -18,12 +18,27 @@ destination_book_directory: ""
 audio_file_extension: ".m4b"
 copy_instead_of_move: false  # Set to true for debugging/testing
 
-# Libation-specific options
-libation_folder_cleanup: false
-libation_file_locations_path: ""  # Optional - path to Libation's FileLocationsV2.json
-
 # Processing options
 purchased_how_long_ago: 7  # Number of days to look back (0 = all books)
 
 # Logging
 log_file_path: "/tmp/book_processing.txt"
+
+# Libation-specific options
+libation_folder_cleanup: false
+libation_file_locations_path: ""  # Optional - path to Libation's FileLocationsV2.json
+
+# OpenAudible-specific options
+
+# Skip AudioBookShelf sync if the files are not yet visible to AudioBookShelf 
+# (for example, if files are uploaded later after local processing)
+skip_audiobookshelf_sync: false
+
+# Skip books with these read statuses (OpenAudible only), such as "Finished"
+# These are the possible options from OpenAudible:
+#  - Finished
+#  - Unread
+#  - Reading
+#  - Want to read
+#  - Did not finish
+ignore_read_statuses: "Finished"

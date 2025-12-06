@@ -28,6 +28,7 @@ def process_open_audible_book_json(book_data: dict) -> dict:
         "description": book_data.get("summary", ""),
         "filename": book_data.get("filename"),
         "purchase_date": book_data.get("purchase_date"),
+        "read_status": book_data.get("read_status"),
         "series": book_data.get("series_name", ""),
         "short_title": book_data.get("title_short"),
         "title": book_data.get("title"),
@@ -114,6 +115,7 @@ def move_audio_book_files(
     purchased_how_long_ago: int,
     source_dir: str,
     libation_file_locations_path: str = "",
+    ignore_read_statuses: list[str] | None = None,
 ) -> list:
     """
     This function reads the books JSON file, processes each book, and logs the results.
@@ -156,11 +158,18 @@ def move_audio_book_files(
         target_date = (datetime.now(timezone.utc) - timedelta(days=9125)).date()
     else:
         target_date = (datetime.now(timezone.utc) - timedelta(days=purchased_how_long_ago)).date()
+    ignore_status_set = {status.lower() for status in (ignore_read_statuses or [])}
     books_to_process_in_audio_bookself = []
     for book in books:
         try:
             if download_program == "OpenAudible":
                 book_data = process_open_audible_book_json(book)
+                read_status = (book_data.get("read_status") or "").strip().lower()
+                if read_status and read_status in ignore_status_set:
+                    log_file.write(
+                        f"{datetime.now()} - INFO - Skipping {book_data['title']} due to read status '{book_data['read_status']}'\n"
+                    )
+                    continue
             else:
                 book_data = process_libation_book_json(book, file_locations)
 
@@ -285,24 +294,30 @@ def main(*args: str):
         args.purchased_how_long_ago,
         args.source_audio_book_directory,
         args.libation_file_locations_path,
+        args.ignore_read_statuses,
     )
 
-    # Now that the files have been moved, we want to kick off the AudioBookShelf scanner
-    scan_library_for_books(args.server_url, args.library_id, args.abs_api_token, log_file)
+    if not args.skip_audiobookshelf_sync:
+        # Now that the files have been moved, we want to kick off the AudioBookShelf scanner
+        scan_library_for_books(args.server_url, args.library_id, args.abs_api_token, log_file)
 
-    # We often need a back-off time in order to allow the scan to complete
-    time.sleep(15)
+        # We often need a back-off time in order to allow the scan to complete
+        time.sleep(15)
 
-    # Sometimes the scanner does not identify the books correctly
-    # In my case I buy books from audible so I want to force the match with audible content
-    books_from_audiobookshelf = get_all_books(args.server_url, args.library_id, args.abs_api_token, log_file)
-    most_recent_books = get_audio_bookshelf_recent_books(
-        books_from_audiobookshelf,
-        log_file,
-        days_ago=args.purchased_how_long_ago,
-        book_list=book_list,
-    )
-    _ = process_audio_books(most_recent_books, args.server_url, args.abs_api_token, log_file)
+        # Sometimes the scanner does not identify the books correctly
+        # In my case I buy books from audible so I want to force the match with audible content
+        books_from_audiobookshelf = get_all_books(args.server_url, args.library_id, args.abs_api_token, log_file)
+        most_recent_books = get_audio_bookshelf_recent_books(
+            books_from_audiobookshelf,
+            log_file,
+            days_ago=args.purchased_how_long_ago,
+            book_list=book_list,
+        )
+        _ = process_audio_books(most_recent_books, args.server_url, args.abs_api_token, log_file)
+    else:
+        log_file.write(
+            f"{datetime.now()} - INFO - Skipping AudioBookShelf scan and match per configuration.\n"
+        )
     log_file.close()
 
 

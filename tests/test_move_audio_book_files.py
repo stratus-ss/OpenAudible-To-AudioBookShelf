@@ -54,6 +54,7 @@ def test_date_filtering(setup_test_environment, test_data):
         "copy_instead_of_move": False,
         "destination_dir": setup_test_environment["dest_dir"],
         "download_program": "OpenAudible",
+        "ignore_read_statuses": ["Finished"],
         "libation_folder_cleanup": False,
         "log_file": open(os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"),
         "purchased_how_long_ago": 7,
@@ -65,6 +66,36 @@ def test_date_filtering(setup_test_environment, test_data):
 
     result = move_audio_book_files(**args)
     assert len(result) == 0
+
+
+def test_ignore_read_statuses_skips_books(setup_test_environment):
+    args = {
+        "audio_file_extension": ".m4b",
+        "books_json_path": os.path.join(setup_test_environment["tmp_path"], "books.json"),
+        "copy_instead_of_move": False,
+        "destination_dir": setup_test_environment["dest_dir"],
+        "download_program": "OpenAudible",
+        "ignore_read_statuses": ["finished"],
+        "libation_folder_cleanup": False,
+        "log_file": open(os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"),
+        "purchased_how_long_ago": 30,
+        "source_dir": setup_test_environment["source_dir"],
+    }
+
+    book_data = {
+        "author": "Skipped Author",
+        "title": "Skipped Book",
+        "asin": "SKIP123",
+        "filename": "skip_book",
+        "purchase_date": datetime.now(timezone.utc).date().isoformat(),
+        "read_status": "Finished",
+    }
+
+    with open(args["books_json_path"], "w") as f:
+        json.dump([book_data], f)
+
+    result = move_audio_book_files(**args)
+    assert result == []
 
 
 @pytest.mark.parametrize(

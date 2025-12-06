@@ -43,6 +43,17 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--ignore-read-statuses",
+        dest="ignore_read_statuses",
+        nargs="*",
+        default=[],
+        help=(
+            "OpenAudible only: one or more read statuses to skip when moving files. "
+            "Accepts multiple values or comma-separated entries."
+        ),
+    )
+
+    parser.add_argument(
         "--destination-book-directory",
         dest="destination_book_directory",
         type=str,
@@ -81,6 +92,17 @@ def _get_parser() -> argparse.ArgumentParser:
         default=False,
         action="store_true",
         help="Copy files instead of moving them (useful for debugging/testing)",
+    )
+
+    parser.add_argument(
+        "--skip-audiobookshelf-sync",
+        dest="skip_audiobookshelf_sync",
+        default=False,
+        action="store_true",
+        help=(
+            "Skip triggering AudioBookShelf scans and matching. "
+            "Useful when the destination directory is not yet accessible to the server."
+        ),
     )
 
     parser.add_argument(
@@ -177,6 +199,7 @@ class Config:
                 _parse_fail("When using --yaml, no other arguments should be provided.")
             config._load_yaml()
 
+        config._normalize_ignore_read_statuses()
         config._validate(exit_on_error=exit_on_error)
         return config
 
@@ -204,6 +227,25 @@ class Config:
     def load_from_env(self: t.Self) -> None:
         # Implement loading configuration from environment variables
         pass
+
+    def _normalize_ignore_read_statuses(self: t.Self) -> None:
+        raw_statuses = getattr(self, "ignore_read_statuses", [])
+
+        # Allow YAML strings, lists, or CLI lists with comma-separated entries
+        if raw_statuses is None:
+            normalized: list[str] = []
+        elif isinstance(raw_statuses, str):
+            normalized = [status.strip() for status in raw_statuses.split(",") if status.strip()]
+        else:
+            normalized = []
+            for status in raw_statuses:
+                if not isinstance(status, str):
+                    continue
+                normalized.extend([
+                    part.strip() for part in status.split(",") if part.strip()
+                ])
+
+        setattr(self, "ignore_read_statuses", normalized)
 
     def _validate(self: t.Self, exit_on_error=True) -> None:
         """
