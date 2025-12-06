@@ -16,23 +16,30 @@ This script automates the process of moving audiobook files from OpenAudible or 
 
 ## Prerequisites
 
-* **Python 3:** Ensure Python 3 is installed on your system.
+* **Python 3.8+:** Ensure Python 3.8 or higher is installed on your system.
 * **Required Python Packages:** Install the necessary packages using:
 
 ```bash
 pip install -r requirements.txt
 ```
 
+  Core dependencies include:
+  - `requests` - For API communication
+  - `pyyaml` - For YAML configuration file support
+  - `openai` - For AI-powered search (optional feature)
+  - `pydantic` - For structured data validation
+  - `bs4` (BeautifulSoup) - For web scraping support
+  
+  Development dependencies (optional, for contributors):
+  - `black`, `flake8`, `mypy`, `isort` - Code formatting and linting
+  - `pytest`, `pytest-cov`, `pytest-mock` - Testing framework
+
 * **OpenAudible or Libation:** This script assumes you have either OpenAudible or Libation installed and configured.
 * **AudioBookShelf:** You need a running instance of AudioBookShelf and its API details.
 * **notify-send:** For desktop notifications.
 
 > [!NOTE]
-> Libation does not export it's library by default. Currently you need to export this yourself
-> ```
-> libationcli export --path $HOME/libation/libation.json --json
-> ```
-> In the future this may be done automatically for you
+> **Libation Auto-Export:** As of the latest version, if you're using Libation and haven't provided a `--books-json-path` or the file doesn't exist, the script will automatically generate `libation.json` for you by calling `libationcli export`. The file will be created in your `--source-audio-book-directory` (where your Libation audiobooks are stored). This means you no longer need to manually export your library! However, you must have `libationcli` available in your PATH.
 
 ## Usage
 
@@ -40,7 +47,44 @@ The script can be run from the command line with various arguments or using a YA
 
 ### Command Line Usage
 
-Libation example:
+Libation example (with auto-generation - recommended, requires libationcli in PATH):
+
+```bash
+python openaudible_to_ab.py \
+  --server-url "http://audiobooks.example.com" \
+  --abs-api-token "YOUR_API_TOKEN" \
+  --library-id "1cc175ca-88b9-4910-abe5-bf10b8aaa702" \
+  --source-audio-book-directory "~/Libation/Books/" \
+  --destination-book-directory "/AudioBookShelf/library1" \
+  --log-file-path "/tmp/book_processing.txt" \
+  --audio-file-extension ".m4b" \
+  --purchased-how-long-ago 7 \
+  --download-program "Libation" \
+  --libation-folder-cleanup True
+```
+
+> [!TIP]
+> Notice that `--books-json-path` is not required! The script will automatically generate `libation.json` in your source audio book directory (`~/Libation/Books/` in this example).
+
+Libation example (with FileLocationsV2.json and explicit books.json path):
+
+```bash
+python openaudible_to_ab.py \
+  --server-url "http://audiobooks.example.com" \
+  --abs-api-token "YOUR_API_TOKEN" \
+  --library-id "1cc175ca-88b9-4910-abe5-bf10b8aaa702" \
+  --books-json-path "~/Libation/books.json" \
+  --libation-file-locations-path "~/Libation/FileLocationsV2.json" \
+  --source-audio-book-directory "~/Libation/Books/" \
+  --destination-book-directory "/AudioBookShelf/library1" \
+  --log-file-path "/tmp/book_processing.txt" \
+  --audio-file-extension ".m4b" \
+  --purchased-how-long-ago 7 \
+  --download-program "Libation" \
+  --libation-folder-cleanup True
+```
+
+Libation example (without FileLocationsV2.json - legacy mode):
 
 ```bash
 python openaudible_to_ab.py \
@@ -50,7 +94,7 @@ python openaudible_to_ab.py \
   --books-json-path "~/Libation/books.json" \
   --source-audio-book-directory "~/Libation/Books/" \
   --destination-book-directory "/AudioBookShelf/library1" \
-  --log-file-path "/tmp/openaudible_to_ab.log" \
+  --log-file-path "/tmp/book_processing.txt" \
   --audio-file-extension ".m4b" \
   --purchased-how-long-ago 7 \
   --download-program "Libation" \
@@ -58,7 +102,7 @@ python openaudible_to_ab.py \
 ```
 
 OpenAudible Example:
-```
+```bash
 python openaudible_to_ab.py \
   --server-url "http://audiobooks.example.com" \
   --abs-api-token "YOUR_API_TOKEN" \
@@ -66,7 +110,7 @@ python openaudible_to_ab.py \
   --books-json-path "~/OpenAudible/books.json" \
   --source-audio-book-directory "~/OpenAudible/books/" \
   --destination-book-directory "/AudioBookShelf/library1" \
-  --log-file-path "/tmp/openaudible_to_ab.log" \
+  --log-file-path "/tmp/book_processing.txt" \
   --audio-file-extension ".m4b" \
   --purchased-how-long-ago 7 \
   --download-program "OpenAudible"
@@ -75,29 +119,33 @@ python openaudible_to_ab.py \
 > [!NOTE]
 > There is an example YAML file `arguments.yaml` which is included in the repo.
 >This file currently looks like:
-> ```
->  abs-api-token: ""
->  books-json: ""
+> ```yaml
+>  abs_api_token: ""
+>  books_json_path: ""
 >  purchased_how_long_ago: 0
 >  destination_book_directory: ""
->  download-program: OpenAudible
+>  download_program: OpenAudible
 >  audio_file_extension: ".m4b"
->  libation-folder-cleanup: False
->  library-id: ""
->  log-file: ""
->  server-url: "http://example.com"
+>  copy_instead_of_move: false
+>  libation_folder_cleanup: false
+>  libation_file_locations_path: ""
+>  library_id: ""
+>  log_file_path: "/tmp/book_processing.txt"
+>  server_url: "http://example.com"
 >  source_audio_book_directory: "/tmp/OpenAudible/books"
 >```
 
 ## Arguments
 
 * **--abs-api-token:** Your AudioBookShelf API token.
-* **--books-json-path:** Path to the JSON file exported from OpenAudible or Libation containing book information.
+* **--books-json-path:** Path to the JSON file exported from OpenAudible or Libation containing book information. (Optional for Libation - will be auto-generated if not provided or if file doesn't exist)
 * **--purchased-how-long-ago:** Number of days to look back for recently purchased books (defaults to 7).
 * **--destination-book-directory:** The destination directory where you want to organize your audiobooks.
 * **--download-program:** Specify the download program - OpenAudible or Libation (defaults to OpenAudible).
 * **--audio-file-extension:** Audio file extension (defaults to .m4b).
+* **--copy-instead-of-move:** Copy files instead of moving them (useful for debugging/testing). Defaults to False.
 * **--libation-folder-cleanup:** Whether to delete the source folder in Libation directory after processing (defaults to False).
+* **--libation-file-locations-path:** Path to Libation's FileLocationsV2.json file (optional, for Libation users). When provided, the script will use the exact file paths from this file instead of constructing them. This is more reliable than the legacy path construction method.
 * **--library-id:** The ID of your library in AudioBookShelf.
 * **--log-file-path:** Path to the log file.
 * **--server-url:** The base URL of your AudioBookShelf instance.
@@ -108,16 +156,15 @@ python openaudible_to_ab.py \
 ## Workflow
 
 1. **Export Book Data:** Export your OpenAudible or Libation library as a JSON file. 
-> [!NOTE]
-> OpenAudible does this automatically when you first login.
-> Libation does not export it's library by default. Currently you need to export this yourself
-> ```
-> libationcli export --path $HOME/libation/libation.json --json
-> ```
-> In the future this may be done automatically for you
+   * **OpenAudible:** Automatically creates `books.json` when you first login.
+   * **Libation:** The script will automatically generate `libation.json` if it doesn't exist (requires `libationcli` in PATH). You can also manually export:
+     ```bash
+     libationcli export --path $HOME/libation/libation.json --json
+     ```
  
 2. **Configuration:** Set the required command-line arguments or use a YAML configuration file.
 3. **Execution:** Run the script. It will:
+   * (Libation only) Auto-generate `libation.json` if needed
    * Process books purchased within the specified timeframe
    * Move audiobook files to the organized directory structure
    * Scan the AudioBookShelf library
@@ -169,6 +216,35 @@ destination_dir/
   "SeriesOrder": "1"
 }
 ```
+
+### Libation FileLocationsV2.json Format:
+Libation maintains a FileLocationsV2.json file that contains the exact file paths for all downloaded audiobooks. Using this file is recommended as it eliminates the need for path construction and handles edge cases (like titles with colons) more reliably.
+
+```json
+{
+  "Dictionary": {
+    "B0123456789": [
+      {
+        "Id": "B0123456789",
+        "FileType": 2,
+        "Path": {
+          "Path": "/path/to/DownloadsInProgress/B0123456789.aaxc"
+        }
+      },
+      {
+        "Id": "B0123456789",
+        "FileType": 1,
+        "Path": {
+          "Path": "/path/to/Books/Book Title [B0123456789]/Book Title: Subtitle [B0123456789].m4b"
+        }
+      }
+    ]
+  }
+}
+```
+
+> [!NOTE]
+> FileType 1 indicates the actual audiobook file, while FileType 2 indicates temporary download files. The script automatically extracts the correct path for the audiobook file.
 
 ## Contributing
 

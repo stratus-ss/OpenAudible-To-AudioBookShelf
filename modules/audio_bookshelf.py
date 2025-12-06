@@ -1,12 +1,11 @@
-import requests
-from datetime import datetime, timedelta, timezone
 import subprocess
 import time
+from datetime import datetime, timedelta, timezone
+
+import requests
 
 
-def scan_library_for_books(
-    server_url: str, library_id: str, abs_api_token: str, log_file=None
-) -> requests.Response:
+def scan_library_for_books(server_url: str, library_id: str, abs_api_token: str, log_file=None) -> requests.Response:
     """
     Scan the library for books using the provided server URL, library ID, and API token.
 
@@ -29,9 +28,7 @@ def scan_library_for_books(
     return response
 
 
-def get_all_books(
-    server_url: str, library_id: str, abs_api_token: str, log_file=None
-) -> requests.Response:
+def get_all_books(server_url: str, library_id: str, abs_api_token: str, log_file=None) -> requests.Response:
     """
     Retrieve all books from the specified library using the provided server URL, library ID, and API token.
 
@@ -79,8 +76,7 @@ def get_audio_bookshelf_recent_books(
         recent_items = [
             item
             for item in json_response.json()["results"]
-            if datetime.fromtimestamp(item["addedAt"] / 1000, timezone.utc).date()
-            >= target_date
+            if datetime.fromtimestamp(item["addedAt"] / 1000, timezone.utc).date() >= target_date
         ]
     else:
         recent_items = []
@@ -95,9 +91,7 @@ def get_audio_bookshelf_recent_books(
     return recent_items
 
 
-def process_audio_books(
-    todays_items: list[dict], server_url: str, abs_api_token: str, log_file
-) -> list[dict]:
+def process_audio_books(todays_items: list[dict], server_url: str, abs_api_token: str, log_file) -> list[dict]:
     """
     Process each audio book item by attempting to match it with the server.
 
@@ -123,9 +117,7 @@ def process_audio_books(
         )
         results.append(output.json())
         if output.ok:
-            log_file.write(
-                f"Finished Matching {item["media"]["metadata"]["title"]} using the Audible Provider"
-            )
+            log_file.write(f"Finished Matching {item["media"]["metadata"]["title"]} using the Audible Provider")
             subprocess.run(
                 [
                     "notify-send",

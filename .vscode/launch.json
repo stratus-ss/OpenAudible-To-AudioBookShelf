@@ -1,0 +1,87 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: OpenAudible to AudioBookShelf (Current File)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/openaudible_to_ab.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python: OpenAudible to AudioBookShelf (with YAML args)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/openaudible_to_ab.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--yaml-config-file",
+                "${workspaceFolder}/arguments.yaml"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python: OpenAudible to AudioBookShelf (Libation)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/openaudible_to_ab.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "--abs-api-token", "",
+                "--books-json-path", "/home/stratus/Libation/libation.json",
+                "--purchased-how-long-ago", "117",
+                "--destination-book-directory", "/mnt/audiobooks/",
+                "--download-program", "Libation",
+                "--audio-file-extension", ".m4b",
+                "--library-id", "7a5df452-da30-4fba-8384-c73d6fe128b2",
+                "--log-file-path", "/tmp/book_processing.txt",
+                "--server-url", "http://containers.example.com:13378",
+                "--source-audio-book-directory", "/home/stratus/Libation/Books",
+                "--copy-instead-of-move"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        },
+        {
+            "name": "Python: Run Tests",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "cwd": "${workspaceFolder}",
+            "args": [
+                "tests/",
+                "-v"
+            ],
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        }
+    ]
+}
+

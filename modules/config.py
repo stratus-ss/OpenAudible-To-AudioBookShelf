@@ -76,11 +76,27 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--copy-instead-of-move",
+        dest="copy_instead_of_move",
+        default=False,
+        action="store_true",
+        help="Copy files instead of moving them (useful for debugging/testing)",
+    )
+
+    parser.add_argument(
         "--libation-folder-cleanup",
         dest="libation_folder_cleanup",
         type=bool,
         default=False,
         help="Delete the source folder in Libation Directory",
+    )
+
+    parser.add_argument(
+        "--libation-file-locations-path",
+        dest="libation_file_locations_path",
+        type=str,
+        default="",
+        help="Path to Libation's FileLocationsV2.json file (optional, uses constructed paths if not provided)",
     )
 
     parser.add_argument(
@@ -194,7 +210,7 @@ class Config:
         Ensure that necessary options are available for the parser to function.
         The required options are:
         - abs_api_token
-        - books_json_path
+        - books_json_path (will be auto-generated for Libation if not provided)
         - destination_book_directory
         - library_id
         - server_url
@@ -206,12 +222,14 @@ class Config:
 
         required = {
             "abs_api_token": "API token not specified in YAML or command line",
-            "books_json_path": "Books JSON file not specified in YAML or command line",
             "destination_book_directory": "Destination directory not specified in YAML or command line",
             "library_id": "Library ID not specified in YAML or command line",
             "server_url": "Server URL not specified in YAML or command line",
             "source_audio_book_directory": "Source directory not specified in YAML or command line",
         }
+        
+        # books_json_path is only required for non-Libation or if file doesn't exist
+        # For Libation, it will be auto-generated if missing
         missing_errors = []
         for attr, error_msg in required.items():
             # Use getattr with a default of None in case the attribute is missing
@@ -219,6 +237,16 @@ class Config:
             # Check that the attribute exists and is not an empty string (if applicable)
             if value is None or (isinstance(value, str) and value.strip() == ""):
                 missing_errors.append(error_msg)
+        
+        # Special handling for books_json_path
+        books_json = getattr(self, "books_json_path", None)
+        download_program = getattr(self, "download_program", "OpenAudible")
+        
+        # Only require books_json_path for OpenAudible or when explicitly set for Libation
+        if download_program != "Libation":
+            if books_json is None or (isinstance(books_json, str) and books_json.strip() == ""):
+                missing_errors.append("Books JSON file not specified in YAML or command line")
+        
         if missing_errors:
             for error_msg in missing_errors:
                 LOGGER.critical(error_msg)

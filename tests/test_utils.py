@@ -1,5 +1,7 @@
-import pytest
 import os
+
+import pytest
+
 from modules.utils import _parse_date, make_directory_structure, sanitize_name
 
 
@@ -40,17 +42,13 @@ def test_valid_date_formats(date_str, expected):
     ],
     ids=["basic", "no_series", "empty_destination"],
 )
-def test_make_directory_structure(
-    author_dir, series_dir, book_title_dir, destination_dir, tmp_path
-):
+def test_make_directory_structure(author_dir, series_dir, book_title_dir, destination_dir, tmp_path):
 
     # Arrange
     temp_dest = tmp_path / destination_dir
 
     # Act
-    result = make_directory_structure(
-        author_dir, series_dir, book_title_dir, str(temp_dest)
-    )
+    result = make_directory_structure(author_dir, series_dir, book_title_dir, str(temp_dest))
 
     # Assert
     expected_dir = temp_dest / author_dir
