@@ -73,7 +73,13 @@ def test_yaml_load_file_not_found(tmp_path: Path, caplog: pytest.LogCaptureFixtu
     with pytest.raises(SystemExit):
         config_obj._load_yaml()
 
-    assert caplog.record_tuples == [("modules.config", logging.CRITICAL, "YAML file not found: %s" % yamlfile)]
+    assert caplog.record_tuples == [
+        (
+            "modules.config",
+            logging.CRITICAL,
+            f"YAML file not found: {yamlfile}",
+        )
+    ]
 
 
 def test_yaml_load_invalid_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
