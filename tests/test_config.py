@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import tempfile
 from collections.abc import Generator
@@ -8,6 +9,12 @@ import pytest
 import yaml
 
 from modules.config import Config
+
+# Real integration test configuration from environment variables
+REAL_ABS_SERVER_URL = os.getenv("ABS_SERVER_URL", "")
+REAL_ABS_API_TOKEN = os.getenv("ABS_API_TOKEN", "")
+OPENAUDIBLE_BOOKS_DIR = os.getenv("OPENAUDIBLE_BOOKS_DIR", "")
+ABS_MOUNT_DIR = os.getenv("ABS_MOUNT_DIR", "")
 
 
 @pytest.fixture
@@ -295,6 +302,15 @@ def test_from_args(yaml_content, expected_attrs):
                 "log_file_path": "/tmp/book_processing.txt",
                 "server_url": "http://example.com",
                 "source_audio_book_directory": "/tmp/OpenAudible/books",
+                "debug": False,
+                "enable_profanity_cleaning": False,
+                "remote_whisper_url": "",
+                "swears_file": "",
+                "working_directory": "/tmp/monkeyplug-cleaning",
+                "save_transcripts": True,
+                "timeout": 600,
+                "beep_mode": False,
+                "confidence_threshold": 0.7,
             },
         ),
     ],

@@ -80,7 +80,9 @@ def _get_parser() -> argparse.ArgumentParser:
         dest="copy_instead_of_move",
         default=False,
         action="store_true",
-        help="Copy files instead of moving them (useful for debugging/testing)",
+        help="Copy files instead of moving them. When profanity cleaning is enabled, "
+             "this will also preserve chunk files and intermediate processing files "
+             "(useful for debugging/testing)",
     )
 
     parser.add_argument(
@@ -132,6 +134,79 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument("--yaml", type=str, help="Path to YAML configuration file")
+
+    parser.add_argument(
+        "--debug",
+        dest="debug",
+        default=False,
+        action="store_true",
+        help="Enable debug mode (includes censorship report for profanity cleaning)",
+    )
+
+    # Profanity Cleaning Arguments
+    parser.add_argument(
+        "--enable-profanity-cleaning",
+        dest="enable_profanity_cleaning",
+        default=False,
+        action="store_true",
+        help="Enable profanity cleaning using MonkeyPlug",
+    )
+
+    parser.add_argument(
+        "--remote-whisper-url",
+        dest="remote_whisper_url",
+        type=str,
+        default="",
+        help="Remote Whisper-WebUI service URL (e.g., http://whisper-server:8000)",
+    )
+
+    parser.add_argument(
+        "--swears-file",
+        dest="swears_file",
+        type=str,
+        default="",
+        help="Path to swears list file (JSON or text). Empty uses MonkeyPlug default.",
+    )
+
+    parser.add_argument(
+        "--working-directory",
+        dest="working_directory",
+        type=str,
+        default="/tmp/monkeyplug-cleaning",
+        help="Working directory for profanity cleaning processing (default: /tmp/monkeyplug-cleaning)",
+    )
+
+    parser.add_argument(
+        "--save-transcripts",
+        dest="save_transcripts",
+        default=True,
+        action="store_true",
+        help="Save transcripts alongside cleaned audio files",
+    )
+
+    parser.add_argument(
+        "--timeout",
+        dest="timeout",
+        type=int,
+        default=600,
+        help="Timeout for transcription in seconds (default: 600 = 10 minutes)",
+    )
+
+    parser.add_argument(
+        "--beep-mode",
+        dest="beep_mode",
+        default=False,
+        action="store_true",
+        help="Use beep instead of mute for profanity (default: False)",
+    )
+
+    parser.add_argument(
+        "--confidence-threshold",
+        dest="confidence_threshold",
+        type=float,
+        default=0.70,
+        help="Minimum confidence (0.0-1.0) required to censor (default: 0.65)",
+    )
 
     return parser
 
@@ -205,6 +280,46 @@ class Config:
         # Implement loading configuration from environment variables
         pass
 
+    def _validate_monkeyplug_settings(self: t.Self, missing_errors: list) -> None:
+        """Validate profanity cleaning configuration settings.
+        
+        Args:
+            missing_errors: List to append validation errors to
+        """
+        if not getattr(self, "enable_profanity_cleaning", False):
+            return
+        
+        whisper_url = getattr(self, "remote_whisper_url", "")
+        if not whisper_url or not whisper_url.strip():
+            missing_errors.append(
+                "Remote Whisper URL required when profanity cleaning is enabled"
+            )
+        
+        # Set default swears file if not provided
+        swears_file = getattr(self, "swears_file", "")
+        if not swears_file or not swears_file.strip():
+            self._set_default_swears_file(missing_errors)
+
+    def _set_default_swears_file(self: t.Self, missing_errors: list) -> None:
+        """Set default swears file from MonkeyPlug package.
+        
+        Args:
+            missing_errors: List to append validation errors to
+        """
+        try:
+            import monkeyplug
+            import os
+            monkeyplug_dir = os.path.dirname(monkeyplug.__file__)
+            default_swears = os.path.join(monkeyplug_dir, 'swears.txt')
+            if os.path.exists(default_swears):
+                self.swears_file = default_swears
+            else:
+                raise FileNotFoundError("swears.txt not found in monkeyplug package")
+        except Exception:
+            missing_errors.append(
+                "Swears file not specified and default not found"
+            )
+
     def _validate(self: t.Self, exit_on_error=True) -> None:
         """
         Ensure that necessary options are available for the parser to function.
@@ -246,6 +361,9 @@ class Config:
         if download_program != "Libation":
             if books_json is None or (isinstance(books_json, str) and books_json.strip() == ""):
                 missing_errors.append("Books JSON file not specified in YAML or command line")
+        
+        # Validate MonkeyPlug settings if profanity cleaning is enabled
+        self._validate_monkeyplug_settings(missing_errors)
         
         if missing_errors:
             for error_msg in missing_errors:

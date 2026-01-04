@@ -7,8 +7,10 @@ from datetime import datetime, timedelta, timezone
 
 from modules.audio_bookshelf import (get_all_books, get_audio_bookshelf_recent_books, process_audio_books,
                                      scan_library_for_books)
+from modules.audio_cleaner import AudioCleaner
 from modules.config import Config
-from modules.utils import _parse_date, generate_libation_json, make_directory_structure, sanitize_name
+from modules.utils import (_parse_date, find_existing_series_folder, generate_libation_json, 
+                           make_directory_structure, sanitize_name)
 
 
 def process_open_audible_book_json(book_data: dict) -> dict:
@@ -114,6 +116,7 @@ def move_audio_book_files(
     purchased_how_long_ago: int,
     source_dir: str,
     libation_file_locations_path: str = "",
+    audio_cleaner=None,
 ) -> list:
     """
     This function reads the books JSON file, processes each book, and logs the results.
@@ -129,6 +132,7 @@ def move_audio_book_files(
         purchased_how_long_ago: Process books purchased within this many days
         source_dir: Source directory containing audio book files
         libation_file_locations_path: Optional path to Libation's FileLocationsV2.json
+        audio_cleaner: Optional AudioCleaner instance for profanity cleaning
 
     Returns:
         list: List of processed books
@@ -170,7 +174,9 @@ def move_audio_book_files(
             if datetime.strptime(purchase_date, "%Y-%m-%d").date() < target_date:
                 continue
             author_dir = sanitize_name(book_data["author"])
-            series_dir = sanitize_name(book_data["series"]) if book_data["series"] else ""
+            series_dir = find_existing_series_folder(
+                author_dir, book_data["series"], destination_dir
+            ) if book_data["series"] else ""
             book_title_dir = sanitize_name(book_data["title"])
             audio_file_name = book_data["filename"] + audio_file_extension
 
@@ -209,12 +215,18 @@ def move_audio_book_files(
                 print(f"Processing: {book_data['title']}")
                 log_file.write(f"{datetime.now()} - INFO - Processing: {book_data['title']}\n")
             books_to_process_in_audio_bookself.append(book_data)
-            if os.path.exists(downloaded_audio_file_path):
+            
+            # Clean audio file if profanity cleaning is enabled
+            file_to_process = downloaded_audio_file_path
+            if audio_cleaner:
+                file_to_process = audio_cleaner.process_audio_file(downloaded_audio_file_path, book_data)
+            
+            if os.path.exists(file_to_process):
                 if copy_instead_of_move:
-                    shutil.copy2(downloaded_audio_file_path, audio_book_destination_dir)
+                    shutil.copy2(file_to_process, audio_book_destination_dir)
                     action = "copied"
                 else:
-                    shutil.move(downloaded_audio_file_path, audio_book_destination_dir)
+                    shutil.move(file_to_process, audio_book_destination_dir)
                     action = "moved"
             if libation_folder_cleanup and not copy_instead_of_move:
                 shutil.rmtree(libation_source_dir)
@@ -272,6 +284,13 @@ def main(*args: str):
             )
             exit(1)
 
+    # Initialize AudioCleaner if profanity cleaning is enabled
+    audio_cleaner = None
+    if getattr(args, 'enable_profanity_cleaning', False):
+        audio_cleaner = AudioCleaner(args, log_file)
+        log_file.write(f"{datetime.now()} - INFO - Profanity cleaning enabled\n")
+        log_file.flush()
+
     # This will process any files in the OpenAudible directory that is 7 days or newer
     # According to current date as compared to the purchase date
     book_list = move_audio_book_files(
@@ -285,6 +304,7 @@ def main(*args: str):
         args.purchased_how_long_ago,
         args.source_audio_book_directory,
         args.libation_file_locations_path,
+        audio_cleaner,
     )
 
     # Now that the files have been moved, we want to kick off the AudioBookShelf scanner
@@ -303,6 +323,12 @@ def main(*args: str):
         book_list=book_list,
     )
     _ = process_audio_books(most_recent_books, args.server_url, args.abs_api_token, log_file)
+    
+    # Log profanity cleaning statistics and cleanup if enabled
+    if audio_cleaner:
+        audio_cleaner.log_statistics()
+        audio_cleaner.cleanup_working_directory()
+    
     log_file.close()
 
 

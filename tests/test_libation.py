@@ -114,22 +114,22 @@ def test_libation_processing(setup_test_environment, test_books, expected_path_s
 @pytest.mark.parametrize(
     "test_books, expected_path_suffix",
     [
-        (
-            [
-                {
-                    "AudibleProductId": "B0C4Z42JNS",
-                    "AuthorNames": "James Osiris Baldwin",
-                    "Title": "The Archemi Online Chronicles Boxset",
-                    "Subtitle": "Books 1, 2 & 3: A LitRPG Epic Fantasy Series (The Archemi Online Chronicles)",
-                    "DateAdded": datetime.now(timezone.utc).isoformat(),
-                }
-            ],
-            "James_Osiris_Baldwin/"
-            "The_Archemi_Online_Chronicles_Boxset__Books_1_2__3_A_LitRPG_Epic_Fantasy_Series_"
-            "The_Archemi_Online_Chronicles/"
-            "The Archemi Online Chronicles Boxset: Books 1, 2 & 3: A LitRPG Epic Fantasy Series "
-            "(The Archemi Online Chronicles) [B0C4Z42JNS].m4b",
-        ),
+            (
+                [
+                    {
+                        "AudibleProductId": "B0C4Z42JNS",
+                        "AuthorNames": "James Osiris Baldwin",
+                        "Title": "The Archemi Online Chronicles Boxset",
+                        "Subtitle": "Books 1, 2 & 3: A LitRPG Epic Fantasy Series (The Archemi Online Chronicles)",
+                        "DateAdded": datetime.now(timezone.utc).isoformat(),
+                    }
+                ],
+                "James_Osiris_Baldwin/"
+                "The_Archemi_Online_Chronicles_Boxset__Books_1_2_and_3_A_LitRPG_Epic_Fantasy_Series_"
+                "The_Archemi_Online_Chronicles/"
+                "The Archemi Online Chronicles Boxset: Books 1, 2 & 3: A LitRPG Epic Fantasy Series "
+                "(The Archemi Online Chronicles) [B0C4Z42JNS].m4b",
+            ),
         (
             [
                 {

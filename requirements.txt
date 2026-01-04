@@ -1,16 +1,8 @@
+# Core runtime dependencies
 requests
 pyyaml
 openai
 pydantic
-bs4
-# Development and Quality Tools
-black>=22.0.0
-flake8>=5.0.0
-mypy>=1.0.0
-isort>=5.10.0
 
-# Testing Framework
-pytest>=7.0.0
-pytest-cov>=4.0.0
-pytest-mock>=3.10.0
-
+# MonkeyPlug for audio profanity cleaning (with AudioChunker)
+monkeyplug @ git+https://github.com/stratus-ss/monkeyplug.git@feature/file-chunking

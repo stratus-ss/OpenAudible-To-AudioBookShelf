@@ -2,7 +2,8 @@ import os
 
 import pytest
 
-from modules.utils import _parse_date, make_directory_structure, sanitize_name
+from modules.utils import (_parse_date, find_existing_series_folder, 
+                           make_directory_structure, sanitize_name)
 
 
 @pytest.mark.parametrize(
@@ -91,3 +92,66 @@ def test_sanitize_name(name, expected):
     result = sanitize_name(name)
     # Assert
     assert result == expected
+
+
+def test_find_existing_series_folder_no_existing(tmp_path):
+    """Test when author folder doesn't exist yet."""
+    result = find_existing_series_folder(
+        "AuthorName", 
+        "Series-Name-With-Hyphens",
+        str(tmp_path)
+    )
+    assert result == "Series_Name_With_Hyphens"
+
+
+def test_find_existing_series_folder_matches_existing(tmp_path):
+    """Test finding existing folder with different separator."""
+    author_dir = tmp_path / "AuthorName"
+    author_dir.mkdir()
+    existing_series = author_dir / "EverybodyLovesLargeChests"
+    existing_series.mkdir()
+    
+    result = find_existing_series_folder(
+        "AuthorName",
+        "Everybody-Loves-Large-Chests",
+        str(tmp_path)
+    )
+    assert result == "EverybodyLovesLargeChests"
+
+
+def test_find_existing_series_folder_no_match(tmp_path):
+    """Test when existing folders don't match."""
+    author_dir = tmp_path / "AuthorName"
+    author_dir.mkdir()
+    other_series = author_dir / "DifferentSeries"
+    other_series.mkdir()
+    
+    result = find_existing_series_folder(
+        "AuthorName",
+        "New-Series-Name",
+        str(tmp_path)
+    )
+    assert result == "New_Series_Name"
+
+
+def test_find_existing_series_folder_empty_series(tmp_path):
+    """Test with empty series name."""
+    result = find_existing_series_folder(
+        "AuthorName",
+        "",
+        str(tmp_path)
+    )
+    assert result == ""
+
+
+def test_find_existing_series_folder_consistency_no_folders(tmp_path):
+    """
+    Test that different separator formats create the same folder when none exist.
+    This prevents the issue where hyphens vs spaces create different folders.
+    """
+    # All these variations should create the same folder name
+    result1 = find_existing_series_folder("Author", "Everybody-Loves-Large-Chests", str(tmp_path))
+    result2 = find_existing_series_folder("Author", "Everybody Loves Large Chests", str(tmp_path))
+    result3 = find_existing_series_folder("Author", "Everybody_Loves_Large_Chests", str(tmp_path))
+    
+    assert result1 == result2 == result3 == "Everybody_Loves_Large_Chests"

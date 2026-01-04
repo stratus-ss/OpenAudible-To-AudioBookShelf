@@ -202,6 +202,9 @@ class TestOpenAudibleBooksDirectory:
     
     def test_openaudible_has_books(self):
         """Test that OpenAudible directory contains audio book files"""
+        if not OPENAUDIBLE_BOOKS_DIR:
+            pytest.skip("OPENAUDIBLE_BOOKS_DIR environment variable not set")
+        
         books_path = Path(OPENAUDIBLE_BOOKS_DIR)
         if not books_path.exists():
             pytest.skip(f"OpenAudible books directory not found: {OPENAUDIBLE_BOOKS_DIR}")

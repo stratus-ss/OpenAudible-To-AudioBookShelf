@@ -7,7 +7,7 @@ name = "openaudible-to-audiobookshelf"
 version = "1.0.0"
 description = "A tool to sync OpenAudible books to AudioBookShelf"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.8"
 dynamic = ["dependencies"]
 

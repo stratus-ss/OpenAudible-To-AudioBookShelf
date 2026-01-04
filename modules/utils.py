@@ -56,7 +56,10 @@ def make_directory_structure(author_dir: str, series_dir: str, book_title_dir: s
 
 def sanitize_name(name: str) -> str:
     """
-    Sanitize a name by replacing commas with underscores and spaces with single underscores.
+    Sanitize a name by replacing special characters for Unix-safe filenames.
+    
+    Replaces ampersands with 'and', removes commas, and replaces spaces with underscores.
+    Only keeps alphanumeric characters, underscores, and periods.
 
     Args:
         name (str): The input name to sanitize.
@@ -64,10 +67,62 @@ def sanitize_name(name: str) -> str:
     Returns:
         str: The sanitized name.
     """
-    name_without_commas = name.replace(",", "")
+    # Replace ampersands with the word "and"
+    name_with_and = name.replace("&", "and")
+    # Remove commas
+    name_without_commas = name_with_and.replace(",", "")
+    # Replace spaces with underscores
     name_with_underscores = name_without_commas.replace(" ", "_")
+    # Keep only alphanumeric, underscores, and periods
     sanitized = "".join([c for c in name_with_underscores if c.isalnum() or c in ("_", ".")])
     return sanitized.rstrip()
+
+
+def find_existing_series_folder(author_dir: str, series_name: str, destination_dir: str) -> str:
+    """
+    Find existing series folder that matches the given series name.
+    
+    Checks for existing folders by comparing normalized names to avoid
+    creating duplicate folders due to metadata inconsistencies (e.g., 
+    "Series-Name" vs "Series Name").
+
+    Args:
+        author_dir: Sanitized author directory name
+        series_name: Original series name from metadata
+        destination_dir: Base destination directory
+
+    Returns:
+        str: Existing folder name if found, otherwise sanitized series name
+    """
+    if not series_name:
+        return ""
+    
+    author_path = os.path.join(destination_dir, author_dir)
+    
+    # If author folder doesn't exist, normalize hyphens to spaces for consistency
+    # This creates "Series_Name" format: "Series-Name" and "Series Name" both -> "Series_Name"
+    if not os.path.exists(author_path):
+        normalized_series = series_name.replace("-", " ")
+        return sanitize_name(normalized_series)
+    
+    # Normalize the series name for comparison - remove all separators
+    normalized_target = series_name.lower().replace("-", "").replace(" ", "").replace("_", "")
+    
+    for existing_folder in os.listdir(author_path):
+        folder_path = os.path.join(author_path, existing_folder)
+        if not os.path.isdir(folder_path):
+            continue
+        
+        normalized_existing = existing_folder.lower().replace("-", "").replace(" ", "").replace("_", "")
+        
+        # If they match when normalized, use the existing folder name
+        if normalized_existing == normalized_target:
+            return existing_folder
+    
+    # No match found, normalize hyphens to spaces for consistency
+    # This creates "Series_Name" format: "Series-Name" and "Series Name" both -> "Series_Name"
+    normalized_series = series_name.replace("-", " ")
+    return sanitize_name(normalized_series)
 
 
 def generate_libation_json(output_path: str, log_file) -> bool:
