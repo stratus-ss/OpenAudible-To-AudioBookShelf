@@ -193,6 +193,14 @@ def _get_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--poll-interval",
+        dest="poll_interval",
+        type=int,
+        default=30,
+        help="How often to check remote Whisper server for transcription status in seconds (default: 30)",
+    )
+
+    parser.add_argument(
         "--beep-mode",
         dest="beep_mode",
         default=False,
@@ -206,6 +214,22 @@ def _get_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.70,
         help="Minimum confidence (0.0-1.0) required to censor (default: 0.65)",
+    )
+
+    parser.add_argument(
+        "--parallel-encoding",
+        dest="parallel_encoding",
+        default=True,
+        action="store_true",
+        help="Enable parallel chunk encoding to use multiple CPU cores (default: True)",
+    )
+
+    parser.add_argument(
+        "--max-workers",
+        dest="max_workers",
+        type=int,
+        default=None,
+        help="Maximum number of parallel workers for chunk encoding (default: None = auto)",
     )
 
     return parser
@@ -269,12 +293,12 @@ class Config:
                     setattr(self, new_key, new_value)
             delattr(self, "yaml")
 
-        except FileNotFoundError:
+        except FileNotFoundError as e:
             LOGGER.critical("YAML file not found: %s", self.yaml)
-            exit(1)
+            raise FileNotFoundError(f"YAML file not found: {self.yaml}") from e
         except yaml.YAMLError as e:
             LOGGER.critical("Error parsing YAML file", exc_info=e)
-            exit(1)
+            raise yaml.YAMLError(f"Error parsing YAML file: {self.yaml}") from e
 
     def load_from_env(self: t.Self) -> None:
         # Implement loading configuration from environment variables
@@ -389,8 +413,11 @@ class Config:
             elif attr in ["yaml", "generate_yaml"]:
                 continue
             else:
-                config_data_attributes[attr] = getattr(self, attr)
+                value = getattr(self, attr)
+                # Explicitly include None values
+                config_data_attributes[attr] = value
 
-        # Write to YAML file
+        # Write to YAML file with explicit null representation
         with open(file_path, "w") as f:
-            yaml.dump(config_data_attributes, f, indent=2, sort_keys=False)
+            yaml.dump(config_data_attributes, f, indent=2, sort_keys=False, default_flow_style=False, 
+                     allow_unicode=True, explicit_start=False)

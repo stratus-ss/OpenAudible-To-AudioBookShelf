@@ -12,8 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from monkeyplug.monkeyplug import WhisperPlugger
-from monkeyplug.audio_chunker import AudioChunker
-from modules.utils import sanitize_name
+from modules.utils import sanitize_name, log_message
 
 
 class AudioCleaningError(Exception):
@@ -23,6 +22,8 @@ class AudioCleaningError(Exception):
 
 class AudioCleaner:
     """Manages profanity cleaning of audio files using MonkeyPlug."""
+    
+    CHUNKING_THRESHOLD_MB = 150  # File size threshold for chunked processing
 
     def __init__(self, config, log_file):
         """
@@ -48,9 +49,8 @@ class AudioCleaner:
     # ============================================================================
 
     def _log(self, message: str, level: str = "INFO"):
-        timestamp = datetime.now()
-        self.log_file.write(f"{timestamp} - {level} - {message}\n")
-        self.log_file.flush()
+        """Write a log message using centralized logging utility."""
+        log_message(self.log_file, message, level)
 
     # ============================================================================
     # MAIN PUBLIC METHODS
@@ -77,32 +77,32 @@ class AudioCleaner:
             paths = self._setup_output_paths(source_file, book_data)
             self._log_configuration(source_file, paths)
             
-            # Initialize plugger
+            # Initialize plugger (with chunking params if needed)
             plugger = self._initialize_monkeyplug(source_file, paths)
             
-            # Check if chunking is needed
-            chunker = AudioChunker(
-                working_dir=str(self.working_dir),
-                plugger=plugger,
-                parallel_encoding=False
-            )
-            
-            if chunker.needs_chunking(source_file):
+            # Let WhisperPlugger handle everything internally (including chunking)
+            file_size_mb = os.path.getsize(source_file) / (1024 * 1024)
+            if file_size_mb > self.CHUNKING_THRESHOLD_MB:
                 self._log("File is large (>150MB), will process with chunking")
-                cleaned_file = chunker.process_with_chunking(source_file, paths["output_file"])
             else:
                 self._log_transcription_start(source_file, 
                     transcript_exists=paths["transcript_file"] and os.path.exists(paths["transcript_file"]))
-                cleaned_file = plugger.EncodeCleanAudio()
+            
+            cleaned_file = plugger.EncodeCleanAudio()
+            
+            # Validate that a file path was returned
+            if cleaned_file is None:
+                # MonkeyPlug may return None but still create the file
+                if os.path.exists(paths["output_file"]):
+                    cleaned_file = paths["output_file"]
+                    self._log("Processing complete (using output file path)")
+                else:
+                    raise AudioCleaningError("Processing returned None - no output file was created")
             
             if not os.path.exists(cleaned_file):
-                raise AudioCleaningError("Cleaned file was not created")
+                raise AudioCleaningError(f"Cleaned file was not created: {cleaned_file}")
             
             self._log_completion(plugger, cleaned_file, paths.get("transcript_file"))
-            
-            # Validate output
-            if not os.path.exists(cleaned_file):
-                raise AudioCleaningError(f"Output file not found: {cleaned_file}")
             
             output_size = os.path.getsize(cleaned_file)
             if output_size == 0:
@@ -182,7 +182,7 @@ class AudioCleaner:
         sanitized_filename = f"{sanitized_base}{ext}"
 
         ext = ext.lstrip(".")
-        audio_format = "m4a" if ext.lower() == "m4b" else ext.lower()
+        audio_format = ext.lower()
 
         output_file = str(book_working_dir / sanitized_filename)
         transcript_file = None
@@ -219,24 +219,60 @@ class AudioCleaner:
                 input_transcript = transcript_file
                 self._log("Found existing transcript, will reuse it")
 
-            return WhisperPlugger(
-                iFileSpec=source_file,
-                oFileSpec=paths["output_file"],
-                oAudioFileFormat=paths["audio_format"],
-                iSwearsFileSpec=self.config.swears_file,
-                mDir=None,
-                mName=None,
-                torchThreads=0,
-                outputJson=paths["transcript_file"],
-                inputTranscript=input_transcript,
-                saveTranscript=self.config.save_transcripts,
-                remoteUrl=self.config.remote_whisper_url,
-                apiTimeout=self.config.timeout,
-                pollInterval=5,
-                beep=self.config.beep_mode,
-                force=False,
-                dbug=getattr(self.config, "debug", False),
-            )
+            # Determine if we should use chunking for large files
+            file_size = os.path.getsize(source_file)
+            use_chunking = file_size > self.CHUNKING_THRESHOLD_MB * 1024 * 1024
+            
+            params = {
+                "iFileSpec": source_file,
+                "oFileSpec": paths["output_file"],
+                "oAudioFileFormat": paths["audio_format"],
+                "iSwearsFileSpec": self.config.swears_file,
+                "mDir": None,
+                "mName": None,
+                "torchThreads": 0,
+                "outputJson": paths["transcript_file"],
+                "reportFormat": "json" if getattr(self.config, "debug", False) else "txt",
+                "inputTranscript": input_transcript,
+                "saveTranscript": self.config.save_transcripts,
+                "remoteUrl": self.config.remote_whisper_url,
+                "apiTimeout": self.config.timeout,
+                "pollInterval": getattr(self.config, "poll_interval", 30),
+                "confidenceThreshold": self.config.confidence_threshold,
+                "beep": self.config.beep_mode,
+                "force": False,
+                "useChunking": use_chunking,
+                "chunkingWorkDir": str(paths["working_dir"]) if use_chunking else None,
+                "parallelEncoding": getattr(self.config, "parallel_encoding", True),
+                "maxWorkers": getattr(self.config, "max_workers", None),
+                "verbose": getattr(self.config, "debug", False),
+            }
+            
+            # Log and print MonkeyPlug parameters if debug enabled
+            separator = "=" * 70
+            header = "MONKEYPLUG PARAMETERS"
+            
+            self._log(separator)
+            self._log(header)
+            self._log(separator)
+            
+            if getattr(self.config, "debug", False):
+                print(separator)
+                print(header)
+                print(separator)
+            
+            for key, value in params.items():
+                if value is not None:
+                    line = f"  {key}: {value}"
+                    self._log(line)
+                    if getattr(self.config, "debug", False):
+                        print(line)
+            
+            self._log(separator)
+            if getattr(self.config, "debug", False):
+                print(separator)
+
+            return WhisperPlugger(**params)
         except Exception as e:
             raise AudioCleaningError(f"Failed to initialize MonkeyPlug: {e}")
 
@@ -263,6 +299,8 @@ class AudioCleaner:
         self._log(f"  Beep mode: {self.config.beep_mode}")
         threshold = self.config.confidence_threshold
         self._log(f"  Confidence threshold: {threshold}")
+        parallel = getattr(self.config, "parallel_encoding", True)
+        self._log(f"  Parallel encoding: {parallel} (multi-core processing)")
         if getattr(self.config, "debug", False):
             self._log(f"  Debug mode: ENABLED (censorship report will be generated)")
 

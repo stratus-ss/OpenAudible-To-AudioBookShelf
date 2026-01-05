@@ -26,7 +26,7 @@ libation_file_locations_path: ""  # Optional - path to Libation's FileLocationsV
 purchased_how_long_ago: 7  # Number of days to look back (0 = all books)
 
 # Logging
-log_file_path: "/tmp/book_processing.txt"
+log_file_path: "/tmp/book_processing.txt"  # Timestamp is automatically added to filename (e.g., book_processing_20260104_140530.txt)
 
 # Debug mode (includes censorship report for profanity cleaning)
 debug: false
@@ -40,5 +40,7 @@ swears_file: ""  # Optional - path to custom swears file (JSON or text). Leave e
 working_directory: "/tmp/monkeyplug-cleaning"  # Temp directory for processing
 save_transcripts: false  # Set to true to keep transcript JSON files for later use
 timeout: 600  # Timeout in seconds (600 = 10 minutes, MonkeyPlug default. Increase for very long audiobooks)
+poll_interval: 30  # How often (in seconds) to check remote Whisper server for transcription status. Default: 30 seconds
 beep_mode: false  # Set to true to beep over profanity instead of muting
 confidence_threshold: 0.75  # Confidence threshold (0.0-1.0) for censoring words (lower = more aggressive)
+parallel_encoding: true  # Enable parallel processing of audio chunks (uses multiple CPU cores for faster processing)

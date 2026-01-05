@@ -77,7 +77,7 @@ def test_yaml_load_file_not_found(tmp_path: Path, caplog: pytest.LogCaptureFixtu
     yamlfile = str(tmp_path / "config.yaml")
     config_obj = Config(yaml=yamlfile)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(FileNotFoundError, match="YAML file not found"):
         config_obj._load_yaml()
 
     assert caplog.record_tuples == [("modules.config", logging.CRITICAL, "YAML file not found: %s" % yamlfile)]
@@ -89,7 +89,7 @@ def test_yaml_load_invalid_file(tmp_path: Path, caplog: pytest.LogCaptureFixture
         file.write("value: !invalid\n")
     config_obj = Config(yaml=yamlfile)
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(yaml.YAMLError, match="Error parsing YAML file"):
         config_obj._load_yaml()
 
     assert caplog.record_tuples == [("modules.config", logging.CRITICAL, "Error parsing YAML file")]
@@ -311,6 +311,9 @@ def test_from_args(yaml_content, expected_attrs):
                 "timeout": 600,
                 "beep_mode": False,
                 "confidence_threshold": 0.7,
+                "parallel_encoding": True,
+                "max_workers": None,
+                "poll_interval": 30,
             },
         ),
     ],

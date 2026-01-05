@@ -146,7 +146,7 @@ python openaudible_to_ab.py \
 >  purchased_how_long_ago: 7  # Number of days to look back (0 = all books)
 >  
 >  # Logging
->  log_file_path: "/tmp/book_processing.txt"
+>  log_file_path: "/tmp/book_processing.txt"  # Timestamp will be added automatically (e.g., book_processing_20260104_140530.txt)
 >  debug: false  # Includes censorship report for profanity cleaning
 >  
 >  # Profanity Cleaning Configuration (Optional)
@@ -156,6 +156,7 @@ python openaudible_to_ab.py \
 >  working_directory: "/tmp/monkeyplug-cleaning"
 >  save_transcripts: false
 >  timeout: 600  # Timeout in seconds (10 minutes)
+>  poll_interval: 30  # Check transcription status every 30 seconds
 >  beep_mode: false
 >  confidence_threshold: 0.75  # 0.0-1.0, lower = more aggressive
 >```
@@ -187,8 +188,11 @@ python openaudible_to_ab.py \
 * **--working-directory:** Working directory for profanity cleaning processing (defaults to /tmp/monkeyplug-cleaning).
 * **--save-transcripts:** Save transcripts alongside cleaned audio files (defaults to False).
 * **--timeout:** Timeout for transcription in seconds (defaults to 600 = 10 minutes).
+* **--poll-interval:** How often to check remote Whisper server for transcription status in seconds (defaults to 30).
 * **--beep-mode:** Use beep instead of mute for profanity (defaults to False).
 * **--confidence-threshold:** Minimum confidence level (0.0-1.0) required to censor a word (defaults to 0.65).
+* **--parallel-encoding:** Enable parallel chunk encoding to use multiple CPU cores (defaults to True).
+* **--no-parallel-encoding:** Disable parallel chunk encoding (use single worker).
 
 ## Workflow
 
@@ -267,6 +271,7 @@ remote_whisper_url: "http://192.168.1.100:8000"
 working_directory: "/tmp/monkeyplug-cleaning"
 save_transcripts: true  # Keep transcripts for reuse if processing fails
 timeout: 600  # 10 minutes per chunk (increase for longer audiobooks)
+poll_interval: 30  # Check transcription status every 30 seconds
 confidence_threshold: 0.65  # Only censor words detected with ≥65% confidence
 beep_mode: false  # Set to true to beep over profanity instead of muting
 copy_instead_of_move: false  # Set to true to preserve chunks/transcripts for debugging

@@ -53,8 +53,8 @@ class TestAudioCleanerInit:
 class TestProcessAudioFile:
     """Test process_audio_file method."""
 
-    @patch('modules.audio_cleaner.AudioChunker')
-    def test_process_audio_file_handles_exception(self, mock_chunker_class):
+    @patch('modules.audio_cleaner.WhisperPlugger')
+    def test_process_audio_file_handles_exception(self, mock_plugger_class):
         """Test that exceptions during processing return original file."""
         with tempfile.NamedTemporaryFile(suffix=".m4b", delete=False) as tmp:
             try:
@@ -67,11 +67,15 @@ class TestProcessAudioFile:
                 config.timeout = 600
                 config.beep_mode = False
                 config.debug = False
+                config.confidence_threshold = 0.75
+                config.parallel_encoding = True
+                config.max_workers = None
+                config.poll_interval = 30
                 config.copy_instead_of_move = False
                 log_file = Mock()
 
-                # Mock AudioChunker to raise exception
-                mock_chunker_class.side_effect = Exception("Test error")
+                # Mock WhisperPlugger to raise exception
+                mock_plugger_class.side_effect = Exception("Test error")
 
                 cleaner = AudioCleaner(config, log_file)
                 book_data = {"title": "Test Book", "asin": "TEST123"}

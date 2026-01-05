@@ -2,6 +2,31 @@ import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, TextIO
+
+
+def get_timestamped_log_path(base_log_path: str) -> str:
+    """    
+    Inserts timestamp before the file extension in format: YYYYMMDD_HHMMSS
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = Path(base_log_path)
+    stem = path.stem
+    suffix = path.suffix
+    parent = path.parent
+    
+    timestamped_name = f"{stem}_{timestamp}{suffix}"
+    return str(parent / timestamped_name)
+
+
+def log_message(log_file: TextIO, message: str, level: str = "INFO"):
+    """
+    Provides consistent logging format across the entire application.
+    Format: YYYY-MM-DD HH:MM:SS.mmmmmm - LEVEL - message
+    """
+    timestamp = datetime.now()
+    log_file.write(f"{timestamp} - {level} - {message}\n")
+    log_file.flush()
 
 
 def _parse_date(date_str: str) -> str:
@@ -137,8 +162,6 @@ def generate_libation_json(output_path: str, log_file) -> bool:
         bool: True if the export was successful, False otherwise.
     """
     try:
-        from datetime import datetime
-
         log_file.write(f"{datetime.now()} - INFO - Generating libation.json using libationcli...\n")
         log_file.flush()
 

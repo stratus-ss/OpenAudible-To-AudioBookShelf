@@ -10,7 +10,7 @@ from modules.audio_bookshelf import (get_all_books, get_audio_bookshelf_recent_b
 from modules.audio_cleaner import AudioCleaner
 from modules.config import Config
 from modules.utils import (_parse_date, find_existing_series_folder, generate_libation_json, 
-                           make_directory_structure, sanitize_name)
+                           make_directory_structure, sanitize_name, get_timestamped_log_path)
 
 
 def process_open_audible_book_json(book_data: dict) -> dict:
@@ -228,12 +228,12 @@ def move_audio_book_files(
                 else:
                     shutil.move(file_to_process, audio_book_destination_dir)
                     action = "moved"
+                log_file.write(
+                    f"{datetime.now()} - INFO - Processed and {action} files for book: {book_data['title']} under \
+                        '{author_dir}/{series_dir}'\n"
+                )
             if libation_folder_cleanup and not copy_instead_of_move:
                 shutil.rmtree(libation_source_dir)
-            log_file.write(
-                f"{datetime.now()} - INFO - Processed and {action} files for book: {book_data['title']} under \
-                    '{author_dir}/{series_dir}'\n"
-            )
         except Exception as e:
             error_title = book_data.get("title", "Unknown Book") if "book_data" in locals() else "Unknown Book"
             log_file.write(f"{datetime.now()} - ERROR - An error occurred while processing {error_title}: {e}\n")
@@ -247,8 +247,12 @@ def main(*args: str):
     if args.generate_yaml:
         args.generate_yaml_from_parser(file_path="/tmp/arguments.yaml")
         exit()
+    
+    # Add timestamp to log file path for unique log per run
+    timestamped_log_path = get_timestamped_log_path(args.log_file_path)
     try:
-        log_file = open(args.log_file_path, "a")
+        log_file = open(timestamped_log_path, "a")
+        print(f"Logging to: {timestamped_log_path}")
     except IOError as e:
         print(f"Error opening log file: {e}")
         exit(1)
