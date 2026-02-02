@@ -8,7 +8,7 @@ version = "1.0.0"
 description = "A tool to sync OpenAudible books to AudioBookShelf"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 dynamic = ["dependencies"]
 
 [tool.setuptools]

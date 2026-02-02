@@ -17,7 +17,7 @@ This script automates the process of moving audiobook files from OpenAudible or 
 
 ## Prerequisites
 
-* **Python 3.8+:** Ensure Python 3.8 or higher is installed on your system.
+* **Python 3.12+:** Ensure Python 3.12 or higher is installed on your system.
 * **Required Python Packages:** Install the necessary packages using:
 
 ```bash
