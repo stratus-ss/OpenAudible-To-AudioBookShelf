@@ -1,0 +1,7 @@
+# Add this to your Moltis config (moltis.toml or mcp.json)
+# Connects to the Audiobook Ingestion MCP server running on your AudioBookShelf host
+
+[mcp.servers.audiobook_ingestion]
+transport = "sse"
+url = "http://your-abs-host:8765/sse"
+# headers = { Authorization = "Bearer ${AUDIOBOOK_MCP_TOKEN}" }

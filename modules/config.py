@@ -88,8 +88,8 @@ def _get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--libation-folder-cleanup",
         dest="libation_folder_cleanup",
-        type=bool,
         default=False,
+        action="store_true",
         help="Delete the source folder in Libation Directory",
     )
 

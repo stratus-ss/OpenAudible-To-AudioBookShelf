@@ -89,11 +89,12 @@ def process_libation_book_json(book_data: dict, file_locations: dict = None) -> 
     if file_locations and "Dictionary" in file_locations:
         asin = book_data.get("AudibleProductId")
         if asin in file_locations["Dictionary"]:
-            # Find the entry with FileType 1 (actual audio book file)
             for location in file_locations["Dictionary"][asin]:
                 if location.get("FileType") == 1:
-                    result["file_path"] = location["Path"]["Path"]
-                    break
+                    candidate = location["Path"]["Path"]
+                    if os.path.exists(candidate):
+                        result["file_path"] = candidate
+                        break
 
     # If no file path was found in FileLocationsV2.json, construct it the old way
     if "file_path" not in result:

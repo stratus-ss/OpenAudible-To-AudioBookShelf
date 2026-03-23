@@ -4,5 +4,8 @@ pyyaml
 openai
 pydantic
 
+# MCP server
+mcp[cli]
+
 # MonkeyPlug for audio profanity cleaning (with AudioChunker)
 monkeyplug @ git+https://github.com/stratus-ss/monkeyplug.git@feature/file-chunking

@@ -1,0 +1,15 @@
+[Unit]
+Description=Audiobook Ingestion MCP Server
+After=network.target
+
+[Service]
+Type=simple
+User=stratus
+WorkingDirectory=/path/to/OpenAudible-To-AudioBookShelf/abs-mcp
+EnvironmentFile=/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/.env
+ExecStart=/path/to/OpenAudible-To-AudioBookShelf/venv/bin/python mcp_server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
