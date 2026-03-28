@@ -1,15 +1,19 @@
 [Unit]
-Description=Audiobook Ingestion MCP Server
-After=network.target
+Description=Audiobook Ingestion MCP Server (SSE)
+After=network-online.target mnt-abs\x2dtest-audiobooks.mount
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=stratus
-WorkingDirectory=/path/to/OpenAudible-To-AudioBookShelf/abs-mcp
-EnvironmentFile=/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/.env
-ExecStart=/path/to/OpenAudible-To-AudioBookShelf/venv/bin/python mcp_server.py
+WorkingDirectory=/home/stratus/OpenAudible-To-AudioBookShelf
+Environment=MCP_ENV_FILE=/home/stratus/OpenAudible-To-AudioBookShelf/abs-mcp/.env
+ExecStart=/home/stratus/OpenAudible-To-AudioBookShelf/venv/bin/python abs-mcp/mcp_server.py
 Restart=on-failure
-RestartSec=5
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=audiobook-mcp
 
 [Install]
 WantedBy=multi-user.target
