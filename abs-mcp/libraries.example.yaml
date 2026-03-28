@@ -1,0 +1,35 @@
+# Library configuration for the Audiobook Ingestion MCP Server
+#
+# Maps friendly names to AudioBookShelf library settings.
+# Tools accept a "library" parameter that resolves via this config.
+#
+# Each library entry supports:
+#   library_id:      ABS library UUID (required)
+#   destination_dir: Filesystem path for file placement (required for books, required for manual podcast downloads)
+#   media_type:      "book" or "podcast" (required)
+#   folder_id:       ABS folder ID within the library (optional, auto-resolved if omitted)
+#   abs_server_url:  Override server URL for this library (optional, falls back to .env)
+#   abs_api_token:   Override API token for this library (optional, falls back to .env)
+
+default_library: kids
+
+libraries:
+  kids:
+    library_id: "your-kids-library-uuid"
+    destination_dir: "/path/to/kids/audiobooks"
+    media_type: book
+
+  adult:
+    library_id: "your-adult-library-uuid"
+    destination_dir: "/path/to/adult/audiobooks"
+    media_type: book
+
+  adult_podcasts:
+    library_id: "your-adult-podcasts-library-uuid"
+    destination_dir: "/path/to/adult/podcasts"
+    media_type: podcast
+
+  kids_podcasts:
+    library_id: "your-kids-podcasts-library-uuid"
+    destination_dir: "/path/to/kids/podcasts"
+    media_type: podcast

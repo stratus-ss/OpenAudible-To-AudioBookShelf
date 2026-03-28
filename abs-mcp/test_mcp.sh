@@ -207,13 +207,13 @@ resp=$(mcpcall "TOOLS")
 tools=$(mcp_json_field "$resp" "tools")
 tool_count=$(mcp_json_len "$tools")
 
-if [[ "$tool_count" == "7" ]]; then
-    log_pass "7 tools registered"
+if [[ "$tool_count" == "16" ]]; then
+    log_pass "16 tools registered"
 else
-    log_fail "Tool count" "expected 7, got $tool_count"
+    log_fail "Tool count" "expected 16, got $tool_count"
 fi
 
-for tool_name in get_status list_library download_books process_books scan_audiobookshelf match_audiobookshelf ingest_books; do
+for tool_name in list_libraries get_status list_library download_books process_books scan_audiobookshelf match_audiobookshelf ingest_books delete_library_items search_podcasts add_podcast list_podcasts get_podcast_episodes download_podcast_episodes fetch_podcast_feed download_podcast_files; do
     if echo "$tools" | grep -q "\"$tool_name\""; then
         log_pass "Tool $tool_name present"
     else
@@ -433,14 +433,89 @@ if assert_no_error "match_audiobookshelf (overrides)" "$resp"; then
     log_pass "match_audiobookshelf with overrides matched_count=$matched"
 fi
 
-# === [10/10] ingest_books (composite — skip by default) ======================
+# === [10/14] list_libraries ==================================================
 
 echo ""
-echo "$(bold '[10/10] ingest_books (composite)')"
+echo "$(bold '[10/14] list_libraries')"
+
+resp=$(mcpcall "CALL list_libraries")
+if assert_no_error "list_libraries" "$resp"; then
+    text=$(mcp_text "$resp")
+    lib_count=$(python3 -c "import sys,json; print(len(json.loads(sys.argv[1]).get('libraries',{})))" "$text" 2>/dev/null)
+    default_lib=$(python3 -c "import sys,json; print(json.loads(sys.argv[1]).get('default_library',''))" "$text" 2>/dev/null)
+
+    if [[ "$lib_count" -gt 0 ]]; then
+        log_pass "list_libraries returned $lib_count libraries (default: $default_lib)"
+    else
+        log_fail "list_libraries returned 0 libraries"
+    fi
+fi
+
+# === [11/14] scan_audiobookshelf with library param =========================
+
+echo ""
+echo "$(bold '[11/14] scan_audiobookshelf (library param)')"
+
+resp=$(mcpcall 'CALL scan_audiobookshelf {"library":"kids"}')
+if assert_no_error "scan_audiobookshelf (library=kids)" "$resp"; then
+    text=$(mcp_text "$resp")
+    success=$(python3 -c "import sys,json; print(json.loads(sys.argv[1]).get('success',False))" "$text" 2>/dev/null)
+    if [[ "$success" == "True" ]]; then
+        log_pass "scan_audiobookshelf library=kids success"
+    else
+        log_fail "scan_audiobookshelf library=kids" "success=$success"
+    fi
+fi
+
+# === [12/14] search_podcasts ================================================
+
+echo ""
+echo "$(bold '[12/14] search_podcasts')"
+
+resp=$(mcpcall 'CALL search_podcasts {"term":"Under The Hood"}')
+if assert_no_error "search_podcasts" "$resp"; then
+    text=$(mcp_text "$resp")
+    result_count=$(python3 -c "import sys,json; print(len(json.loads(sys.argv[1])))" "$text" 2>/dev/null)
+    if [[ "$result_count" -gt 0 ]]; then
+        log_pass "search_podcasts found $result_count results"
+    else
+        log_fail "search_podcasts" "0 results"
+    fi
+fi
+
+# === [13/14] fetch_podcast_feed =============================================
+
+echo ""
+echo "$(bold '[13/14] fetch_podcast_feed')"
+
+resp=$(mcpcall 'CALL fetch_podcast_feed {"apple_url":"https://podcasts.apple.com/us/podcast/under-the-hood-show/id410937196","max_episodes":3}')
+if assert_no_error "fetch_podcast_feed" "$resp"; then
+    text=$(mcp_text "$resp")
+    ep_count=$(python3 -c "import sys,json; print(len(json.loads(sys.argv[1]).get('episodes',[])))" "$text" 2>/dev/null)
+    feed_title=$(python3 -c "import sys,json; print(json.loads(sys.argv[1]).get('podcast_title',''))" "$text" 2>/dev/null)
+
+    if [[ "$ep_count" -gt 0 ]]; then
+        log_pass "fetch_podcast_feed returned $ep_count episodes for '$feed_title'"
+    else
+        log_fail "fetch_podcast_feed" "0 episodes"
+    fi
+
+    has_url=$(python3 -c "import sys,json; print('yes' if json.loads(sys.argv[1]).get('episodes',[])[0].get('download_url') else 'no')" "$text" 2>/dev/null)
+    if [[ "$has_url" == "yes" ]]; then
+        log_pass "fetch_podcast_feed episodes have download_url"
+    else
+        log_fail "fetch_podcast_feed episodes missing download_url"
+    fi
+fi
+
+# === [14/14] ingest_books (composite — skip by default) ======================
+
+echo ""
+echo "$(bold '[14/14] ingest_books (composite)')"
 log_skip "ingest_books" "Components tested individually above. Run manually to test full pipeline."
 echo ""
-echo "  To test ingest_books with overrides manually:"
-echo "    mcpcall 'CALL ingest_books {\"purchased_how_long_ago\":0,\"abs_library_id\":\"<uuid>\",\"destination_dir\":\"/path/to/lib\"}'"
+echo "  To test ingest_books with library param:"
+echo "    mcpcall 'CALL ingest_books {\"purchased_how_long_ago\":0,\"library\":\"kids\"}'"
 
 # === SUMMARY =================================================================
 
