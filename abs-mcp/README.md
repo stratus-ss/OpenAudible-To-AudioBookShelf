@@ -4,7 +4,7 @@ MCP server that automates the audiobook pipeline: downloading from Audible via L
 
 ## Prerequisites
 
-- Python 3.14+ with venv at `../venv`
+- Python 3.10+ with venv at `../venv`
 - `mcp[cli]` and `monkeyplug` installed in the venv (see `../requirements.txt`)
 - `libationcli` on PATH
 - NFS mount (or local path) from ABS server's audiobooks directory to the host running this server
@@ -156,6 +156,18 @@ End-to-end pipeline: download -> organize -> scan ABS -> match metadata.
 | `abs_library_id` | str | ABS library UUID |
 | `abs_api_token` | str | ABS API bearer token |
 
+### delete_library_items
+
+Delete items from the ABS library by ID or purge everything. Useful for test cleanup since ABS retains database entries even after files are removed from disk.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `item_ids` | list[str] | Specific ABS item IDs to delete |
+| `delete_all` | bool | If true, delete every item in the library |
+| `abs_server_url` | str | ABS server URL |
+| `abs_library_id` | str | ABS library UUID |
+| `abs_api_token` | str | ABS API bearer token |
+
 ### Multi-Library Example
 
 ```
@@ -185,9 +197,11 @@ sudo systemctl enable --now audiobook-ingestion-mcp
 
 Requires `.env` at the path specified in the service file's `EnvironmentFile`.
 
-### Cursor MCP (stdio)
+### Cursor (stdio -- local)
 
-The server auto-loads `abs-mcp/.env` on startup, so the client config only needs the command and transport. Edit `abs-mcp/.env` to change settings -- no need to touch the MCP config.
+When the MCP server runs on the same machine as Cursor. The server auto-loads `abs-mcp/.env` on startup, so the client config only needs the command and transport.
+
+> **Important:** Use absolute paths for both the Python binary and the script. Cursor does not reliably resolve relative paths via `cwd`.
 
 Add to `~/.cursor/mcp.json` under `"mcpServers"`:
 
@@ -195,32 +209,37 @@ Add to `~/.cursor/mcp.json` under `"mcpServers"`:
 {
   "audiobook-ingestion": {
     "command": "/path/to/OpenAudible-To-AudioBookShelf/venv/bin/python",
-    "args": ["abs-mcp/mcp_server.py"],
-    "cwd": "/path/to/OpenAudible-To-AudioBookShelf",
+    "args": ["/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/mcp_server.py"],
     "env": {
-      "MCP_TRANSPORT": "stdio"
+      "MCP_TRANSPORT": "stdio",
+      "MCP_ENV_FILE": "/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/.env"
     }
   }
 }
 ```
 
-To use a different env file (e.g. test config):
+### Cursor (SSE -- remote)
+
+When the MCP server runs on a remote host (e.g. the machine with Libation and the NFS mount) and Cursor connects over the network.
+
+**On the remote host**, start the server:
+
+```bash
+cd /path/to/OpenAudible-To-AudioBookShelf
+MCP_ENV_FILE=abs-mcp/.env venv/bin/python abs-mcp/mcp_server.py
+```
+
+**In Cursor**, add to `~/.cursor/mcp.json` under `"mcpServers"`:
 
 ```json
 {
   "audiobook-ingestion": {
-    "command": "/path/to/OpenAudible-To-AudioBookShelf/venv/bin/python",
-    "args": ["abs-mcp/mcp_server.py"],
-    "cwd": "/path/to/OpenAudible-To-AudioBookShelf",
-    "env": {
-      "MCP_TRANSPORT": "stdio",
-      "MCP_ENV_FILE": "/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/.env.test"
-    }
+    "url": "http://your-abs-host:8765/sse"
   }
 }
 ```
 
-### Claude Code (stdio)
+### Claude Code (stdio -- local)
 
 Add to `~/.claude/settings.json` (or project `.mcp.json`):
 
@@ -229,17 +248,31 @@ Add to `~/.claude/settings.json` (or project `.mcp.json`):
   "mcpServers": {
     "audiobook-ingestion": {
       "command": "/path/to/OpenAudible-To-AudioBookShelf/venv/bin/python",
-      "args": ["abs-mcp/mcp_server.py"],
-      "cwd": "/path/to/OpenAudible-To-AudioBookShelf",
+      "args": ["/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/mcp_server.py"],
       "env": {
-        "MCP_TRANSPORT": "stdio"
+        "MCP_TRANSPORT": "stdio",
+        "MCP_ENV_FILE": "/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/.env"
       }
     }
   }
 }
 ```
 
-All settings come from `abs-mcp/.env` (or the file specified by `MCP_ENV_FILE`). Must run on the host where Libation and the NFS mount are available (your-abs-host).
+### Claude Code (SSE -- remote)
+
+Add to `~/.claude/settings.json` (or project `.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "audiobook-ingestion": {
+      "url": "http://your-abs-host:8765/sse"
+    }
+  }
+}
+```
+
+> **Note:** The MCP server must run on the host where Libation and the NFS mount to the ABS audiobooks directory are available. For remote setups, start the server on that host in SSE mode and connect from Cursor/Claude Code via the URL.
 
 ## Moltis Integration (SSE)
 
@@ -265,7 +298,7 @@ bash abs-mcp/test_mcp.sh --skip-download         # skip Libation download step
 bash abs-mcp/test_mcp.sh --env abs-mcp/.env      # use production env
 ```
 
-The test covers 10 stages: prerequisites, bridge startup, tool discovery, then each tool with both default and override parameters (get_status, list_library, download_books, process_books, scan_audiobookshelf, match_audiobookshelf, ingest_books).
+The test covers prerequisites, bridge startup, tool discovery, then each tool with both default and override parameters (get_status, list_library, download_books, process_books, scan_audiobookshelf, match_audiobookshelf, ingest_books, delete_library_items).
 
 ### Test Environment
 
