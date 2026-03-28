@@ -4,7 +4,7 @@ import pytest
 import requests
 from requests.exceptions import HTTPError
 
-from modules.audio_bookshelf import get_all_books, get_audio_bookshelf_recent_books
+from modules.audio_bookshelf import get_all_books, get_audio_bookshelf_recent_books, update_book_series
 
 
 @pytest.fixture
@@ -206,16 +206,18 @@ TEST_DATA = [
         },
         None,
         0,
-        [{"title": "Book 2", "asin": "asin2"}],
+        [{"title": "Book 2", "short_title": "Book 2", "asin": "asin2", "series": "", "volumeNumber": ""}],
         [
             {
                 "addedAt": int((datetime.now(timezone.utc) - timedelta(days=2)).timestamp() * 1000),
                 "media": {"metadata": {"title": "Book 2", "asin": "asin2"}},
+                "_original_series": "",
+                "_original_volume": "",
             }
         ],
     ),
     ({"results": []}, None, 1, [], []),
-    ({"results": []}, None, 0, [{"title": "Book 1", "asin": "asin1"}], []),
+    ({"results": []}, None, 0, [{"title": "Book 1", "short_title": "Book 1", "asin": "asin1"}], []),
 ]
 
 
@@ -231,3 +233,127 @@ def test_get_audio_bookshelf_recent_books(
     recent_items = get_audio_bookshelf_recent_books(response, days_ago=days_ago, book_list=book_list)
 
     assert recent_items == expected_recent_items
+
+
+def test_short_title_matching(mocker):
+    """short_title should be used for matching instead of the full title."""
+    abs_data = {
+        "results": [
+            {
+                "id": "li_abc123",
+                "addedAt": 1700000000000,
+                "media": {"metadata": {"title": "Master_of_None__All_Trades_Book_1"}},
+            }
+        ]
+    }
+    book_list = [
+        {
+            "title": "Master of None - All Trades, Book 1",
+            "short_title": "Master of None",
+            "asin": "B0C24R5GP1",
+            "series": "All Trades",
+            "volumeNumber": "1",
+        }
+    ]
+    response = mocker.MagicMock()
+    response.json.return_value = abs_data
+
+    results = get_audio_bookshelf_recent_books(response, book_list=book_list)
+
+    assert len(results) == 0, "Sanitized folder title should NOT contain the short_title substring"
+
+
+def test_short_title_matching_with_real_abs_title(mocker):
+    """ABS often parses a readable title from audio file metadata."""
+    abs_data = {
+        "results": [
+            {
+                "id": "li_abc123",
+                "addedAt": 1700000000000,
+                "media": {"metadata": {"title": "Master of None"}},
+            }
+        ]
+    }
+    book_list = [
+        {
+            "title": "Master of None - All Trades, Book 1",
+            "short_title": "Master of None",
+            "asin": "B0C24R5GP1",
+            "series": "All Trades",
+            "volumeNumber": "1",
+        }
+    ]
+    response = mocker.MagicMock()
+    response.json.return_value = abs_data
+
+    results = get_audio_bookshelf_recent_books(response, book_list=book_list)
+
+    assert len(results) == 1
+    assert results[0]["media"]["metadata"]["asin"] == "B0C24R5GP1"
+    assert results[0]["_original_series"] == "All Trades"
+    assert results[0]["_original_volume"] == "1"
+
+
+def test_book_list_matching_no_series(mocker):
+    """Books without a series should still match and have empty series fields."""
+    abs_data = {
+        "results": [
+            {
+                "id": "li_xyz",
+                "addedAt": 1700000000000,
+                "media": {"metadata": {"title": "Shelving Magic Complete Series Boxed Set"}},
+            }
+        ]
+    }
+    book_list = [
+        {
+            "title": "Shelving Magic Complete Series Boxed Set",
+            "short_title": "Shelving Magic Complete Series Boxed Set",
+            "asin": "B0GK35DRY4",
+            "series": "",
+            "volumeNumber": "",
+        }
+    ]
+    response = mocker.MagicMock()
+    response.json.return_value = abs_data
+
+    results = get_audio_bookshelf_recent_books(response, book_list=book_list)
+
+    assert len(results) == 1
+    assert results[0]["_original_series"] == ""
+    assert results[0]["_original_volume"] == ""
+
+
+def test_update_book_series_sends_patch(mocker):
+    """update_book_series should PATCH the correct endpoint with series payload."""
+    mock_patch = mocker.patch("modules.audio_bookshelf.requests.patch")
+    mock_response = mocker.MagicMock()
+    mock_response.ok = True
+    mock_patch.return_value = mock_response
+
+    result = update_book_series(
+        item_id="li_abc123",
+        series_name="All Trades",
+        volume_number="1",
+        server_url="http://abs.example.com",
+        abs_api_token="test_token",
+    )
+
+    mock_patch.assert_called_once_with(
+        "http://abs.example.com/api/items/li_abc123/media",
+        json={"metadata": {"series": [{"name": "All Trades", "sequence": "1"}]}},
+        headers={"Authorization": "Bearer test_token"},
+    )
+    assert result == mock_response
+
+
+def test_update_book_series_empty_name_returns_none():
+    """update_book_series should return None when series_name is empty."""
+    result = update_book_series(
+        item_id="li_abc123",
+        series_name="",
+        volume_number="1",
+        server_url="http://abs.example.com",
+        abs_api_token="test_token",
+    )
+    assert result is None
