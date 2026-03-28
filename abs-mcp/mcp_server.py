@@ -257,6 +257,52 @@ def scan_audiobookshelf(
 
 
 @mcp.tool()
+def delete_library_items(
+    item_ids: list[str] | None = None,
+    delete_all: bool = False,
+    abs_server_url: str | None = None,
+    abs_library_id: str | None = None,
+    abs_api_token: str | None = None,
+) -> str:
+    """Delete items from the AudioBookShelf library.
+
+    Use to clean up test data or remove specific items. Provide either
+    a list of item IDs or set delete_all=True to purge the library.
+
+    Args:
+        item_ids: Specific ABS library item IDs to delete.
+        delete_all: If True, delete every item in the library (use with caution).
+        abs_server_url: Override ABS server URL (default: from .env).
+        abs_library_id: Override ABS library ID (default: from .env).
+        abs_api_token: Override ABS API token (default: from .env).
+    """
+    import requests
+
+    url = _r(abs_server_url, "ABS_SERVER_URL")
+    lib_id = _r(abs_library_id, "ABS_LIBRARY_ID")
+    token = _r(abs_api_token, "ABS_API_TOKEN")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    ids_to_delete = list(item_ids) if item_ids else []
+
+    if delete_all and not ids_to_delete:
+        resp = requests.get(
+            f"{url}/api/libraries/{lib_id}/items",
+            headers=headers,
+            params={"limit": 5000},
+        )
+        if resp.ok:
+            ids_to_delete = [item["id"] for item in resp.json().get("results", [])]
+
+    results = []
+    for item_id in ids_to_delete:
+        r = requests.delete(f"{url}/api/items/{item_id}", headers=headers)
+        results.append({"id": item_id, "status": r.status_code})
+
+    return json.dumps({"deleted": len(results), "results": results}, indent=2)
+
+
+@mcp.tool()
 def match_audiobookshelf(
     days_ago: int = 7,
     abs_server_url: str | None = None,
