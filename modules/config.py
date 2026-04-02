@@ -136,6 +136,27 @@ def _get_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yaml", type=str, help="Path to YAML configuration file")
 
     parser.add_argument(
+        "--step",
+        dest="step",
+        type=str,
+        default=None,
+        choices=["scan", "download", "export", "organize", "scan-abs", "match"],
+        help="Run a single pipeline step instead of the full pipeline. "
+             "Returns structured JSON. Steps: scan (refresh Audible library), "
+             "download (liberate books), export (write libation.json), "
+             "organize (move files to ABS directory), scan-abs (trigger ABS scan), "
+             "match (match ABS items to Audible metadata).",
+    )
+
+    parser.add_argument(
+        "--asins",
+        dest="asins",
+        nargs="*",
+        default=None,
+        help="ASINs to download (used with --step download)",
+    )
+
+    parser.add_argument(
         "--debug",
         dest="debug",
         default=False,
@@ -235,10 +256,14 @@ def _get_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class ConfigError(ValueError):
+    """Raised when configuration validation fails."""
+
+
 def _parse_fail(msg: str) -> None:
     LOGGER.error(msg)
     _get_parser().print_help(sys.stderr)
-    exit(1)
+    raise ConfigError(msg)
 
 
 class Config:
@@ -266,14 +291,15 @@ class Config:
 
         parser.parse_args(args=args, namespace=config)
 
-        # Check if --yaml is used and exit if other arguments are provided
         if config.yaml:
-            # Get the list of arguments passed to the parser
             parser_args = sys.argv[1:] if args is None else args
-
-            # If more than one argument is passed (yaml and the yaml file path), it's an error
-            if len(parser_args) > 2:
-                _parse_fail("When using --yaml, no other arguments should be provided.")
+            allowed_with_yaml = {"--yaml", "--step", "--asins"}
+            extra = [a for a in parser_args if a.startswith("--") and a not in allowed_with_yaml]
+            if extra:
+                _parse_fail(
+                    "When using --yaml, only --step and --asins may be combined. "
+                    f"Unexpected: {', '.join(extra)}"
+                )
             config._load_yaml()
 
         config._validate(exit_on_error=exit_on_error)
@@ -394,7 +420,7 @@ class Config:
                 LOGGER.critical(error_msg)
 
             if exit_on_error:
-                exit(1)
+                raise ConfigError("; ".join(missing_errors))
 
     def generate_yaml_from_parser(self: t.Self, file_path: str | None = None) -> None:
         """
@@ -410,7 +436,7 @@ class Config:
         for attr in _get_parser().parse_args(args=()).__dict__.keys():
             if attr == "file":
                 config_data_attributes[attr] = str(getattr(self, attr))
-            elif attr in ["yaml", "generate_yaml"]:
+            elif attr in ["yaml", "generate_yaml", "step", "asins"]:
                 continue
             else:
                 value = getattr(self, attr)

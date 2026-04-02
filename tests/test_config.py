@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from modules.config import Config
+from modules.config import Config, ConfigError
 
 # Real integration test configuration from environment variables
 REAL_ABS_SERVER_URL = os.getenv("ABS_SERVER_URL", "")
@@ -107,19 +107,14 @@ def test_cli_yaml_and_args(
                 "argv",
                 ["pytest", "--yaml", "./filename", "--library-id", "ad9234lkjx"],
             )
-            with pytest.raises(SystemExit):
+            with pytest.raises(ConfigError):
                 Config.from_args()
 
-        # Verify the correct error message was logged
-        assert caplog.record_tuples == [
-            (
-                "modules.config",
-                logging.ERROR,
-                "When using --yaml, no other arguments should be provided.",
-            )
-        ]
+        assert any(
+            "only --step and --asins may be combined" in rec.message
+            for rec in caplog.records
+        )
 
-        # Verify that help text was printed to stderr
         output = capsys.readouterr()
         assert "usage:" in output.err
 
@@ -188,7 +183,7 @@ def assert_config_correct(config_dict: dict, config_obj: Config) -> None:
 def test_validate_param(config_kwargs, expect_exit, expected_logs, caplog):
     with caplog.at_level(logging.CRITICAL):
         if expect_exit:
-            with pytest.raises(SystemExit):
+            with pytest.raises(ConfigError):
                 Config(**config_kwargs)._validate()
         else:
             Config(**config_kwargs)._validate()
@@ -207,7 +202,7 @@ def test_validate_param(config_kwargs, expect_exit, expected_logs, caplog):
         (["--abs-api-token", "123"], {"abs_api_token": "123"}),
         (["--purchased-how-long-ago", "3"], {"purchased_how_long_ago": 3}),
         (["--audio-file-extension", ".mp3"], {"audio_file_extension": ".mp3"}),
-        (["--libation-folder-cleanup", "True"], {"libation_folder_cleanup": True}),
+        (["--libation-folder-cleanup"], {"libation_folder_cleanup": True}),
     ],
 )
 def test_cli_argument_parsing(cli_args, expected_attr):
@@ -222,12 +217,12 @@ def test_cli_argument_parsing(cli_args, expected_attr):
     "args",
     [
         ["--yaml", "config.yaml", "--abs-api-token", "123"],
-        ["--yaml", "config.yaml", "--days=5"],
+        ["--yaml", "config.yaml", "--library-id", "xyz"],
     ],
 )
 def test_yaml_exclusivity(args):
     """Test YAML mode prevents other arguments"""
-    with pytest.raises(SystemExit):
+    with pytest.raises(ConfigError):
         Config.from_args(False, *args)
 
 
@@ -277,8 +272,6 @@ def test_from_args(yaml_content, expected_attrs):
                 "OpenAudible",
                 "--audio-file-extension",
                 ".m4b",
-                "--libation-folder-cleanup",
-                False,
                 "--library-id",
                 "123456",
                 "--log-file-path",

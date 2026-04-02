@@ -125,7 +125,7 @@ def test_existing_file_handling(setup_test_environment, test_data):
     ],
 )
 def test_error_handling(setup_test_environment, invalid_input):
-    with pytest.raises(SystemExit):
+    with pytest.raises(RuntimeError):
         move_audio_book_files(
             audio_file_extension=".m4b",
             books_json_path=invalid_input[0],

@@ -137,7 +137,7 @@ def test_get_all_books(
     mock_response = mocker.MagicMock()
     mock_response.status_code = expected_status
     mock_get.return_value = mock_response
-    expected_url = f"{server_url}/api/libraries/{library_id}/items?sort=addedAt"
+    expected_url = f"{server_url}/api/libraries/{library_id}/items"
     expected_headers = {"Authorization": f"Bearer {abs_api_token}"}
 
     if expected_status == 200:
@@ -159,7 +159,12 @@ def test_get_all_books(
     all_book_response = get_all_books(server_url, library_id, abs_api_token)
     assert all_book_response.status_code == expected_status
 
-    mock_get.assert_called_once_with(expected_url, headers=expected_headers)
+    mock_get.assert_called_once_with(
+        expected_url,
+        headers=expected_headers,
+        params={"sort": "addedAt", "limit": 0},
+        timeout=30,
+    )
 
     if expected_status == 200:
         response_data = all_book_response.json()
@@ -343,6 +348,7 @@ def test_update_book_series_sends_patch(mocker):
         "http://abs.example.com/api/items/li_abc123/media",
         json={"metadata": {"series": [{"name": "All Trades", "sequence": "1"}]}},
         headers={"Authorization": "Bearer test_token"},
+        timeout=30,
     )
     assert result == mock_response
 

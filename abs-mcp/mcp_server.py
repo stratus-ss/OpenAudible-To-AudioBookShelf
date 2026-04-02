@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -52,29 +53,82 @@ else:
     _load_dotenv(ABS_MCP_DIR / ".env")
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.streamable_http import EventStore
+from mcp.types import JSONRPCMessage
 
-from modules.audio_bookshelf import (
-    get_all_books,
-    get_audio_bookshelf_recent_books,
-    process_audio_books,
-    scan_library_for_books,
-)
-from modules.audio_cleaner import AudioCleaner
+from modules.audio_bookshelf import scan_library_for_books
+from modules.config import Config
 from modules.utils import generate_libation_json
-from openaudible_to_ab import move_audio_book_files
+from openaudible_to_ab import (
+    step_scan, step_download, step_export, step_organize,
+    step_scan_abs, step_match,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger("audiobook-ingestion-mcp")
 
+
+class InMemoryEventStore(EventStore):
+    """Simple in-memory event store for SSE/streamable-http session resumability."""
+
+    def __init__(self, max_events: int = 500):
+        self._events: dict[str, tuple[str, JSONRPCMessage | None]] = {}
+        self._streams: dict[str, list[str]] = {}
+        self._counter = 0
+        self._max_events = max_events
+
+    async def store_event(self, stream_id, message):
+        self._counter += 1
+        event_id = f"evt-{self._counter}"
+        self._events[event_id] = (stream_id, message)
+        self._streams.setdefault(stream_id, []).append(event_id)
+        if len(self._events) > self._max_events:
+            oldest = next(iter(self._events))
+            sid, _ = self._events.pop(oldest)
+            if sid in self._streams:
+                self._streams[sid] = [e for e in self._streams[sid] if e != oldest]
+        return event_id
+
+    async def replay_events_after(self, last_event_id, send_callback):
+        if last_event_id not in self._events:
+            return None
+        stream_id, _ = self._events[last_event_id]
+        event_list = self._streams.get(stream_id, [])
+        found = False
+        for eid in event_list:
+            if eid == last_event_id:
+                found = True
+                continue
+            if found:
+                _, msg = self._events[eid]
+                if msg is not None:
+                    await send_callback(msg)
+        return stream_id if found else None
+
+
 mcp = FastMCP(
     "Audiobook Ingestion",
     instructions=(
-        "This server manages audiobook and podcast ingestion: "
-        "downloading audiobooks from Audible via Libation, organizing files, "
-        "importing into AudioBookShelf, and managing podcasts across "
-        "multiple libraries (e.g. kids, adult, podcasts). "
-        "Use list_libraries to see available libraries and their types."
+        "This server manages audiobook and podcast ingestion into AudioBookShelf. "
+        "WORKFLOW FOR AUDIOBOOK INGESTION (use individual step tools for reliability):\n"
+        "1. list_libraries — discover available libraries and their types\n"
+        "2. list_library — browse all books in the Audible/Libation library\n"
+        "3. scan_audible — refresh the Audible library list (~10s)\n"
+        "4. download_books — download/decrypt books via Libation (pass ASINs or omit for all)\n"
+        "5. export_library — export metadata to libation.json (~2s)\n"
+        "6. organize_books — move files into Author/Series/Title tree\n"
+        "7. scan_audiobookshelf — trigger ABS library scan (~20s)\n"
+        "8. match_audiobookshelf — match ABS items to Audible metadata\n\n"
+        "The ingest_books tool runs all steps sequentially but can timeout on "
+        "long-running operations. Prefer individual step tools for LLM orchestration.\n\n"
+        "DISCOVERY & VERIFICATION TOOLS:\n"
+        "- list_library — filter by status/author/title/duration to find specific books\n"
+        "- get_source_status — inspect source/destination directories (file counts, extensions)\n"
+        "- list_abs_library — verify what's currently in AudioBookShelf\n"
+        "- delete_library_items — remove items with optional cleanup_files to delete disk files\n\n"
+        "Always specify library= to target the correct ABS instance (e.g. 'adult', 'kids')."
     ),
+    event_store=InMemoryEventStore(),
     host=os.environ.get("MCP_HOST", "0.0.0.0"),
     port=int(os.environ.get("MCP_PORT", "8765")),
 )
@@ -160,41 +214,57 @@ def _abs_headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _build_audio_cleaner(
-    log_file,
-    enable: bool | None = None,
-    copy_mode: bool | None = None,
-) -> AudioCleaner | None:
-    """Build an AudioCleaner if profanity cleaning is enabled."""
-    enabled = enable if enable is not None else _env("ENABLE_PROFANITY_CLEANING", "false").lower() == "true"
-    if not enabled:
-        return None
-
-    copy_val = copy_mode if copy_mode is not None else _env("COPY_INSTEAD_OF_MOVE", "false").lower() == "true"
-
-    class _EnvConfig:
-        working_directory = _env("WORKING_DIRECTORY", "/tmp/monkeyplug-cleaning")
-        copy_instead_of_move = copy_val
-        save_transcripts = _env("SAVE_TRANSCRIPTS", "true").lower() == "true"
-        swears_file = _env("SWEARS_FILE", "")
-        remote_whisper_url = _env("REMOTE_WHISPER_URL", "")
-        timeout = int(_env("TIMEOUT", "600"))
-        confidence_threshold = float(_env("CONFIDENCE_THRESHOLD", "0.70"))
-        beep_mode = _env("BEEP_MODE", "false").lower() == "true"
-
-    return AudioCleaner(_EnvConfig(), log_file)
-
-
-def _run_libationcli(args: list[str], timeout: int = 600, cli_path: str | None = None) -> dict:
-    cli = cli_path or _env("LIBATION_CLI", "libationcli")
-    cmd = [cli] + args
-    LOGGER.info("Running: %s", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
-    return {
-        "success": result.returncode == 0,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-    }
+def _build_config(
+    library: str | None = None,
+    source_dir: str | None = None,
+    destination_dir: str | None = None,
+    audio_file_extension: str | None = None,
+    copy_instead_of_move: bool | None = None,
+    libation_folder_cleanup: bool | None = None,
+    libation_file_locations_path: str | None = None,
+    enable_profanity_cleaning: bool | None = None,
+    purchased_how_long_ago: int = 7,
+    abs_server_url: str | None = None,
+    abs_library_id: str | None = None,
+    abs_api_token: str | None = None,
+    libation_cli: str | None = None,
+    asins: list[str] | None = None,
+) -> Config:
+    """Build a Config object from MCP tool parameters + library registry + env."""
+    lib = _resolve_library(library)
+    cfg = Config()
+    cfg.source_audio_book_directory = _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY")
+    cfg.destination_book_directory = destination_dir or lib["destination_dir"]
+    cfg.audio_file_extension = _r(audio_file_extension, "AUDIO_FILE_EXTENSION", ".m4b")
+    cfg.copy_instead_of_move = (
+        copy_instead_of_move if copy_instead_of_move is not None
+        else _env("COPY_INSTEAD_OF_MOVE", "false").lower() == "true"
+    )
+    cfg.libation_folder_cleanup = (
+        libation_folder_cleanup if libation_folder_cleanup is not None
+        else _env("LIBATION_FOLDER_CLEANUP", "false").lower() == "true"
+    )
+    cfg.libation_file_locations_path = _r(libation_file_locations_path, "LIBATION_FILE_LOCATIONS_PATH")
+    cfg.enable_profanity_cleaning = (
+        enable_profanity_cleaning if enable_profanity_cleaning is not None
+        else _env("ENABLE_PROFANITY_CLEANING", "false").lower() == "true"
+    )
+    cfg.purchased_how_long_ago = purchased_how_long_ago
+    cfg.server_url = abs_server_url or lib["abs_server_url"]
+    cfg.library_id = abs_library_id or lib["library_id"]
+    cfg.abs_api_token = abs_api_token or lib["abs_api_token"]
+    cfg.libation_cli = libation_cli or _env("LIBATION_CLI", "libationcli")
+    cfg.download_program = "Libation"
+    cfg.books_json_path = str(Path(cfg.source_audio_book_directory) / "libation.json")
+    cfg.asins = asins
+    cfg.working_directory = _env("WORKING_DIRECTORY", "/tmp/monkeyplug-cleaning")
+    cfg.save_transcripts = _env("SAVE_TRANSCRIPTS", "true").lower() == "true"
+    cfg.swears_file = _env("SWEARS_FILE", "")
+    cfg.remote_whisper_url = _env("REMOTE_WHISPER_URL", "")
+    cfg.timeout = int(_env("TIMEOUT", "600"))
+    cfg.confidence_threshold = float(_env("CONFIDENCE_THRESHOLD", "0.70"))
+    cfg.beep_mode = _env("BEEP_MODE", "false").lower() == "true"
+    return cfg
 
 
 @mcp.tool()
@@ -220,12 +290,68 @@ def list_libraries() -> str:
     return json.dumps(result, indent=2)
 
 
+def _filter_library_books(
+    books: list[dict],
+    status: str | None,
+    author: str | None,
+    title: str | None,
+    min_duration: int | None,
+    max_duration: int | None,
+) -> list[dict]:
+    """Apply filters to a list of Libation book dicts."""
+    result = books
+    if status:
+        status_lower = status.lower()
+        result = [b for b in result if b.get("BookStatus", "").lower() == status_lower]
+    if author:
+        author_lower = author.lower()
+        result = [b for b in result if author_lower in b.get("AuthorNames", "").lower()]
+    if title:
+        title_lower = title.lower()
+        result = [b for b in result if title_lower in b.get("Title", "").lower()]
+    if min_duration is not None:
+        result = [b for b in result if b.get("LengthInMinutes", 0) >= min_duration]
+    if max_duration is not None:
+        result = [b for b in result if b.get("LengthInMinutes", 0) <= max_duration]
+    return result
+
+
+def _sort_library_books(books: list[dict], sort_by: str) -> list[dict]:
+    """Sort book list by a supported field."""
+    key_map = {
+        "duration": lambda b: b.get("LengthInMinutes", 0),
+        "title": lambda b: b.get("Title", "").lower(),
+        "author": lambda b: b.get("AuthorNames", "").lower(),
+        "date_added": lambda b: b.get("DateAdded", ""),
+    }
+    key_fn = key_map.get(sort_by)
+    if key_fn:
+        return sorted(books, key=key_fn)
+    return books
+
+
 @mcp.tool()
-def list_library(source_dir: str | None = None) -> str:
-    """List all books in the Audible library from Libation's export.
+def list_library(
+    source_dir: str | None = None,
+    status: str | None = None,
+    author: str | None = None,
+    title: str | None = None,
+    max_duration: int | None = None,
+    min_duration: int | None = None,
+    limit: int = 0,
+    sort_by: str | None = None,
+) -> str:
+    """List books in the Audible library from Libation's export with filtering.
 
     Args:
         source_dir: Libation books directory (default: from .env).
+        status: Filter by BookStatus (e.g. 'NotLiberated', 'Liberated').
+        author: Filter by author name (case-insensitive substring match).
+        title: Filter by title (case-insensitive substring match).
+        max_duration: Only books shorter than this many minutes.
+        min_duration: Only books longer than this many minutes.
+        limit: Max results to return (0 = all).
+        sort_by: Sort field: 'duration', 'title', 'author', 'date_added' (default: none).
     """
     src = _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY")
     json_path = str(Path(src) / "libation.json")
@@ -237,53 +363,122 @@ def list_library(source_dir: str | None = None) -> str:
     with open(json_path) as f:
         books = json.load(f)
 
+    filtered = _filter_library_books(books, status, author, title, min_duration, max_duration)
+
+    if sort_by:
+        filtered = _sort_library_books(filtered, sort_by)
+
+    if limit > 0:
+        filtered = filtered[:limit]
+
     summary = [
         {
             "asin": b.get("AudibleProductId", ""),
             "title": b.get("Title", ""),
             "author": b.get("AuthorNames", ""),
             "series": b.get("SeriesNames", ""),
+            "duration_minutes": b.get("LengthInMinutes", 0),
+            "status": b.get("BookStatus", ""),
             "date_added": b.get("DateAdded", ""),
         }
-        for b in books
+        for b in filtered
     ]
-    return json.dumps(summary, indent=2)
+    return json.dumps({"total": len(summary), "books": summary}, indent=2)
+
+
+@mcp.tool()
+def scan_audible(
+    libation_cli: str | None = None,
+) -> str:
+    """Refresh the Audible library list via Libation.
+
+    This is a fast operation (~10 seconds). Run before download_books
+    to ensure the library listing is current.
+
+    Args:
+        libation_cli: Path to libationcli binary (default: from .env).
+    """
+    cfg = _build_config(libation_cli=libation_cli)
+    result = step_scan(cfg)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def set_book_status(
+    asins: list[str],
+    status: str = "not-downloaded",
+    force: bool = True,
+    libation_cli: str | None = None,
+) -> str:
+    """Set the download status of books in Libation's database.
+
+    Use status='not-downloaded' to mark books as unliberated so they
+    can be re-downloaded with download_books.
+
+    Args:
+        asins: Product IDs (ASINs) of books to update.
+        status: 'not-downloaded' or 'downloaded'.
+        force: Set status even if the audio file exists on disk.
+        libation_cli: Path to libationcli binary (default: from .env).
+    """
+    cli = libation_cli or _env("LIBATION_CLI", "libationcli")
+    flag = "--not-downloaded" if status == "not-downloaded" else "--downloaded"
+    cmd = [cli, "set-status", flag]
+    if force:
+        cmd.append("--force")
+    cmd.extend(asins)
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    return json.dumps({
+        "success": result.returncode == 0,
+        "asins": asins,
+        "status_set": status,
+        "force": force,
+        "stdout": result.stdout.strip(),
+        "stderr": result.stderr.strip(),
+    }, indent=2)
 
 
 @mcp.tool()
 def download_books(
     asins: list[str] | None = None,
-    force: bool = False,
-    source_dir: str | None = None,
     libation_cli: str | None = None,
 ) -> str:
     """Download audiobooks from Audible via Libation CLI.
 
+    Can take minutes for large books. Pass specific ASINs to download
+    only those books, or omit to download all un-downloaded books.
+
     Args:
         asins: Optional list of ASINs to download. If empty, downloads all new books.
-        force: Force re-download even if already downloaded.
-        source_dir: Libation books directory (default: from .env).
         libation_cli: Path to libationcli binary (default: from .env).
     """
-    _run_libationcli(["scan"], cli_path=libation_cli)
-
-    args = ["liberate"]
-    if force:
-        args.append("--force")
-    if asins:
-        args.extend(asins)
-    result = _run_libationcli(args, timeout=3600, cli_path=libation_cli)
-
-    src = _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY")
-    json_path = str(Path(src) / "libation.json")
-    _run_libationcli(["export", "--path", json_path, "--json"], cli_path=libation_cli)
-
+    cfg = _build_config(libation_cli=libation_cli, asins=asins)
+    result = step_download(cfg)
     return json.dumps(result, indent=2)
 
 
 @mcp.tool()
-def process_books(
-    purchased_how_long_ago: int = 7,
+def export_library(
+    source_dir: str | None = None,
+    libation_cli: str | None = None,
+) -> str:
+    """Export Libation library metadata to libation.json.
+
+    Run after download_books so the JSON reflects newly downloaded titles.
+
+    Args:
+        source_dir: Libation books directory (default: from .env).
+        libation_cli: Path to libationcli binary (default: from .env).
+    """
+    cfg = _build_config(source_dir=source_dir, libation_cli=libation_cli)
+    result = step_export(cfg)
+    return json.dumps(result, indent=2)
+
+
+@mcp.tool()
+def organize_books(
+    purchased_how_long_ago: int = 0,
     library: str | None = None,
     source_dir: str | None = None,
     destination_dir: str | None = None,
@@ -293,82 +488,109 @@ def process_books(
     libation_file_locations_path: str | None = None,
     enable_profanity_cleaning: bool | None = None,
 ) -> str:
-    """Organize downloaded audiobooks into the destination directory structure.
+    """Organize downloaded audiobooks into the ABS directory structure.
 
     Reads the Libation JSON export, filters by purchase date, and moves/copies
-    audio files into Author/Series/Title folder hierarchy.
+    audio files into an Author/Series/Title folder hierarchy.
+
+    Default audio format is .m4b. If no .m4b files are found in the source
+    directory, the tool auto-detects the actual extension present. Pass
+    audio_file_extension='.mp3' only if you specifically need mp3.
 
     Args:
         purchased_how_long_ago: Process books purchased within this many days. 0 means all.
-        library: Library name from libraries.yaml (e.g. 'kids', 'adult'). Resolves destination_dir.
+        library: Library name from libraries.yaml (e.g. 'kids', 'adult').
         source_dir: Libation books directory (default: from .env).
-        destination_dir: ABS audiobooks directory / NFS mount (default: from .env or library config).
-        audio_file_extension: File extension to look for, e.g. '.m4b' (default: from .env).
+        destination_dir: ABS audiobooks directory (default: from .env or library config).
+        audio_file_extension: File extension (default: .m4b, auto-detects if no .m4b found).
         copy_instead_of_move: Copy files instead of moving (default: from .env).
         libation_folder_cleanup: Delete Libation source folders after move (default: from .env).
         libation_file_locations_path: Path to Libation FileLocationsV2.json (default: from .env).
         enable_profanity_cleaning: Enable monkeyplug profanity filtering (default: from .env).
     """
-    lib = _resolve_library(library)
-    log = _log_buffer()
-    src = _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY")
-    dest = destination_dir or lib["destination_dir"]
-    ext = _r(audio_file_extension, "AUDIO_FILE_EXTENSION", ".m4b")
-    copy_mode = copy_instead_of_move if copy_instead_of_move is not None else _env("COPY_INSTEAD_OF_MOVE", "false").lower() == "true"
-    cleanup = libation_folder_cleanup if libation_folder_cleanup is not None else _env("LIBATION_FOLDER_CLEANUP", "false").lower() == "true"
-    file_loc = _r(libation_file_locations_path, "LIBATION_FILE_LOCATIONS_PATH")
-    json_path = str(Path(src) / "libation.json")
+    user_specified_ext = audio_file_extension is not None
 
-    audio_cleaner = _build_audio_cleaner(log, enable=enable_profanity_cleaning, copy_mode=copy_mode)
-    processed = move_audio_book_files(
-        audio_file_extension=ext,
-        books_json_path=json_path,
-        copy_instead_of_move=copy_mode,
-        destination_dir=dest,
-        download_program="Libation",
-        libation_folder_cleanup=cleanup,
-        log_file=log,
+    cfg = _build_config(
+        library=library, source_dir=source_dir, destination_dir=destination_dir,
+        audio_file_extension=audio_file_extension, copy_instead_of_move=copy_instead_of_move,
+        libation_folder_cleanup=libation_folder_cleanup,
+        libation_file_locations_path=libation_file_locations_path,
+        enable_profanity_cleaning=enable_profanity_cleaning,
         purchased_how_long_ago=purchased_how_long_ago,
-        source_dir=src,
-        libation_file_locations_path=file_loc,
-        audio_cleaner=audio_cleaner,
     )
-    return json.dumps({"processed_count": len(processed), "books": processed, "log": log.getvalue()}, indent=2)
+
+    if not user_specified_ext:
+        detected = _detect_audio_extension(Path(cfg.source_audio_book_directory))
+        if detected and detected != cfg.audio_file_extension:
+            LOGGER.info(
+                "Auto-detected audio extension %s (configured: %s)",
+                detected, cfg.audio_file_extension,
+            )
+            cfg.audio_file_extension = detected
+
+    result = step_organize(cfg)
+    clean = {k: v for k, v in result.items() if not k.startswith("_")}
+    clean["audio_file_extension"] = cfg.audio_file_extension
+    return json.dumps(clean, indent=2)
+
+
+def _detect_audio_extension(source_dir: Path) -> str:
+    """Detect the most common audio extension in the source directory."""
+    if not source_dir.is_dir():
+        return ""
+    audio_exts = {".m4b", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac"}
+    counts: dict[str, int] = {}
+    for child in source_dir.iterdir():
+        if not child.is_dir():
+            continue
+        for f in child.rglob("*"):
+            if f.is_file() and f.suffix.lower() in audio_exts:
+                ext = f.suffix.lower()
+                counts[ext] = counts.get(ext, 0) + 1
+    if not counts:
+        return ""
+    return max(counts, key=lambda e: (e == ".m4b", counts[e]))
 
 
 @mcp.tool()
 def scan_audiobookshelf(
     library: str | None = None,
+    wait: int = 15,
     abs_server_url: str | None = None,
     abs_library_id: str | None = None,
     abs_api_token: str | None = None,
 ) -> str:
-    """Trigger an AudioBookShelf library scan.
+    """Trigger an AudioBookShelf library scan and wait for it to settle.
+
+    Run after organize_books so ABS discovers the new files.
 
     Args:
-        library: Library name from libraries.yaml (e.g. 'kids', 'adult_podcasts').
-        abs_server_url: Override ABS server URL (default: from .env or library config).
-        abs_library_id: Override ABS library ID (default: from .env or library config).
-        abs_api_token: Override ABS API token (default: from .env or library config).
+        library: Library name from libraries.yaml (e.g. 'kids', 'adult').
+        wait: Seconds to wait after triggering the scan (default: 15).
+        abs_server_url: Override ABS server URL.
+        abs_library_id: Override ABS library ID.
+        abs_api_token: Override ABS API token.
     """
-    lib = _resolve_library(library)
-    url = abs_server_url or lib["abs_server_url"]
-    lib_id = abs_library_id or lib["library_id"]
-    token = abs_api_token or lib["abs_api_token"]
-    resp = scan_library_for_books(url, lib_id, token)
-    return json.dumps({"success": resp.ok, "status_code": resp.status_code})
+    cfg = _build_config(
+        library=library, abs_server_url=abs_server_url,
+        abs_library_id=abs_library_id, abs_api_token=abs_api_token,
+    )
+    result = step_scan_abs(cfg, wait=wait)
+    return json.dumps(result, indent=2)
 
 
 @mcp.tool()
 def delete_library_items(
     item_ids: list[str] | None = None,
     delete_all: bool = False,
+    cleanup_files: bool = False,
     library: str | None = None,
+    source_dir: str | None = None,
     abs_server_url: str | None = None,
     abs_library_id: str | None = None,
     abs_api_token: str | None = None,
 ) -> str:
-    """Delete items from the AudioBookShelf library.
+    """Delete items from the AudioBookShelf library and optionally clean up files.
 
     Use to clean up test data or remove specific items. Provide either
     a list of item IDs or set delete_all=True to purge the library.
@@ -376,10 +598,12 @@ def delete_library_items(
     Args:
         item_ids: Specific ABS library item IDs to delete.
         delete_all: If True, delete every item in the library (use with caution).
+        cleanup_files: Also remove audio files from the destination and source directories.
         library: Library name from libraries.yaml (e.g. 'kids', 'adult').
-        abs_server_url: Override ABS server URL (default: from .env or library config).
-        abs_library_id: Override ABS library ID (default: from .env or library config).
-        abs_api_token: Override ABS API token (default: from .env or library config).
+        source_dir: Libation source directory to clean (default: from .env).
+        abs_server_url: Override ABS server URL.
+        abs_library_id: Override ABS library ID.
+        abs_api_token: Override ABS API token.
     """
     lib = _resolve_library(library)
     url = abs_server_url or lib["abs_server_url"]
@@ -388,57 +612,157 @@ def delete_library_items(
     headers = _abs_headers(token)
 
     ids_to_delete = list(item_ids) if item_ids else []
+    items_data = []
 
     if delete_all and not ids_to_delete:
         resp = requests.get(
             f"{url}/api/libraries/{lib_id}/items",
             headers=headers,
-            params={"limit": 5000},
+            params={"limit": 0},
+            timeout=30,
         )
         if resp.ok:
-            ids_to_delete = [item["id"] for item in resp.json().get("results", [])]
+            items_data = resp.json().get("results", [])
+            ids_to_delete = [item["id"] for item in items_data]
+
+    if cleanup_files and ids_to_delete:
+        detailed = []
+        for item_id in ids_to_delete:
+            r = requests.get(f"{url}/api/items/{item_id}", headers=headers, timeout=30)
+            if r.ok:
+                detailed.append(r.json())
+        items_data = detailed
 
     results = []
     for item_id in ids_to_delete:
-        r = requests.delete(f"{url}/api/items/{item_id}", headers=headers)
+        r = requests.delete(f"{url}/api/items/{item_id}", headers=headers, timeout=30)
         results.append({"id": item_id, "status": r.status_code})
 
-    return json.dumps({"deleted": len(results), "results": results}, indent=2)
+    files_cleaned = []
+    if cleanup_files:
+        files_cleaned = _cleanup_item_files(
+            items_data, lib["destination_dir"],
+            _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY"),
+        )
+
+    output: dict = {"deleted": len(results), "results": results}
+    if cleanup_files:
+        output["files_cleaned"] = files_cleaned
+    return json.dumps(output, indent=2)
+
+
+def _cleanup_item_files(
+    items_data: list[dict],
+    destination_dir: str,
+    source_dir: str,
+) -> list[dict]:
+    """Remove audio files from destination and source directories for deleted items."""
+    cleaned = []
+    dest_dirs_removed: set[str] = set()
+
+    for item in items_data:
+        item_path = item.get("path", "")
+        rel_path = item.get("relPath", "")
+        title = item.get("media", {}).get("metadata", {}).get("title", "unknown")
+        entry: dict = {"title": title, "dest_removed": False, "source_removed": False}
+
+        dest_path = _resolve_dest_path(item_path, rel_path, destination_dir)
+        if dest_path and dest_path not in dest_dirs_removed:
+            entry.update(_try_rmtree(dest_path, "dest"))
+            if entry["dest_removed"]:
+                dest_dirs_removed.add(dest_path)
+
+        if source_dir:
+            _clean_source_by_audio_files(Path(source_dir), item, entry)
+
+        cleaned.append(entry)
+    return cleaned
+
+
+def _resolve_dest_path(item_path: str, rel_path: str, destination_dir: str) -> str:
+    """Resolve the actual filesystem path for an ABS item's destination folder."""
+    if item_path and Path(item_path).is_dir():
+        return item_path
+    if rel_path and destination_dir:
+        candidate = Path(destination_dir) / rel_path
+        if candidate.is_dir():
+            return str(candidate)
+    return ""
+
+
+def _try_rmtree(path: str, prefix: str) -> dict:
+    """Attempt to remove a directory tree, returning status dict."""
+    result: dict = {f"{prefix}_removed": False}
+    try:
+        shutil.rmtree(path)
+        result[f"{prefix}_removed"] = True
+        result[f"{prefix}_path"] = path
+    except Exception as e:
+        result[f"{prefix}_error"] = str(e)
+    return result
+
+
+def _clean_source_by_audio_files(source: Path, item: dict, entry: dict) -> None:
+    """Remove source folder matching by audio filenames or ASIN in folder name."""
+    if not source.is_dir():
+        return
+    audio_files = item.get("media", {}).get("audioFiles", [])
+    filenames = {Path(af.get("metadata", {}).get("filename", "")).stem.lower() for af in audio_files}
+    filenames.discard("")
+
+    for child in source.iterdir():
+        if not child.is_dir():
+            continue
+        child_files = {f.stem.lower() for f in child.rglob("*") if f.is_file()}
+        if filenames and filenames & child_files:
+            entry.update(_try_rmtree(str(child), "source"))
+            return
+
+    title = item.get("media", {}).get("metadata", {}).get("title", "").lower()
+    if not title:
+        return
+    for child in source.iterdir():
+        if child.is_dir() and title in child.name.lower():
+            entry.update(_try_rmtree(str(child), "source"))
+            return
 
 
 @mcp.tool()
 def match_audiobookshelf(
     days_ago: int = 7,
     library: str | None = None,
+    book_list: list[dict] | None = None,
     abs_server_url: str | None = None,
     abs_library_id: str | None = None,
     abs_api_token: str | None = None,
 ) -> str:
-    """Match recently added AudioBookShelf items to Audible metadata.
+    """Match AudioBookShelf items to Audible metadata.
+
+    Run after scan_audiobookshelf to match newly added books.
+    Either pass days_ago to match recent items, or pass book_list
+    (output from organize_books) to match specific titles.
 
     Args:
-        days_ago: Match items added within this many days.
+        days_ago: Match items added within this many days (default: 7).
         library: Library name from libraries.yaml (e.g. 'kids', 'adult').
-        abs_server_url: Override ABS server URL (default: from .env or library config).
-        abs_library_id: Override ABS library ID (default: from .env or library config).
-        abs_api_token: Override ABS API token (default: from .env or library config).
+        book_list: Specific books to match (list of dicts with title/asin/series keys).
+        abs_server_url: Override ABS server URL.
+        abs_library_id: Override ABS library ID.
+        abs_api_token: Override ABS API token.
     """
-    lib = _resolve_library(library)
-    log = _log_buffer()
-    url = abs_server_url or lib["abs_server_url"]
-    lib_id = abs_library_id or lib["library_id"]
-    token = abs_api_token or lib["abs_api_token"]
-
-    all_books = get_all_books(url, lib_id, token)
-    recent = get_audio_bookshelf_recent_books(all_books, log, days_ago=days_ago)
-    results = process_audio_books(recent, url, token, log)
-    return json.dumps({"matched_count": len(results), "log": log.getvalue()}, indent=2)
+    cfg = _build_config(
+        library=library, abs_server_url=abs_server_url,
+        abs_library_id=abs_library_id, abs_api_token=abs_api_token,
+        purchased_how_long_ago=days_ago,
+    )
+    result = step_match(cfg, book_list=book_list)
+    return json.dumps(result, indent=2)
 
 
 @mcp.tool()
 def ingest_books(
     asins: list[str] | None = None,
-    purchased_how_long_ago: int = 7,
+    purchased_how_long_ago: int = 0,
     library: str | None = None,
     source_dir: str | None = None,
     destination_dir: str | None = None,
@@ -452,14 +776,19 @@ def ingest_books(
     abs_library_id: str | None = None,
     abs_api_token: str | None = None,
 ) -> str:
-    """End-to-end pipeline: download -> organize -> scan ABS -> match metadata.
+    """End-to-end pipeline: scan -> download -> export -> organize -> scan ABS -> match.
+
+    WARNING: This runs all six steps sequentially and can take 30+ minutes.
+    LLM agents should prefer calling individual step tools for reliability:
+      scan_audible -> download_books -> export_library -> organize_books
+      -> scan_audiobookshelf -> match_audiobookshelf
 
     Args:
         asins: Optional list of ASINs to download. If empty, downloads all new books.
         purchased_how_long_ago: Process books purchased within this many days. 0 means all.
-        library: Library name from libraries.yaml (e.g. 'kids', 'adult'). Resolves destination and ABS settings.
+        library: Library name from libraries.yaml (e.g. 'kids', 'adult').
         source_dir: Libation books directory (default: from .env).
-        destination_dir: ABS audiobooks directory / NFS mount (default: from .env or library config).
+        destination_dir: ABS audiobooks directory (default: from .env or library config).
         audio_file_extension: File extension, e.g. '.m4b' (default: from .env).
         copy_instead_of_move: Copy files instead of moving (default: from .env).
         libation_folder_cleanup: Delete Libation source folders after move (default: from .env).
@@ -470,63 +799,42 @@ def ingest_books(
         abs_library_id: ABS library UUID (default: from .env or library config).
         abs_api_token: ABS API bearer token (default: from .env or library config).
     """
-    lib = _resolve_library(library)
-    results = {}
-    log = _log_buffer()
-    src = _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY")
-    dest = destination_dir or lib["destination_dir"]
-    ext = _r(audio_file_extension, "AUDIO_FILE_EXTENSION", ".m4b")
-    copy_mode = copy_instead_of_move if copy_instead_of_move is not None else _env("COPY_INSTEAD_OF_MOVE", "false").lower() == "true"
-    cleanup = libation_folder_cleanup if libation_folder_cleanup is not None else _env("LIBATION_FOLDER_CLEANUP", "false").lower() == "true"
-    file_loc = _r(libation_file_locations_path, "LIBATION_FILE_LOCATIONS_PATH")
-    json_path = str(Path(src) / "libation.json")
-    url = abs_server_url or lib["abs_server_url"]
-    lib_id = abs_library_id or lib["library_id"]
-    token = abs_api_token or lib["abs_api_token"]
-
-    LOGGER.info("Step 1: Scanning Audible library")
-    results["scan_audible"] = _run_libationcli(["scan"], cli_path=libation_cli)
-
-    LOGGER.info("Step 2: Downloading books")
-    liberate_args = ["liberate"]
-    if asins:
-        liberate_args.extend(asins)
-    results["download"] = _run_libationcli(liberate_args, timeout=3600, cli_path=libation_cli)
-
-    LOGGER.info("Step 3: Exporting library metadata")
-    results["export"] = _run_libationcli(["export", "--path", json_path, "--json"], cli_path=libation_cli)
-
-    LOGGER.info("Step 4: Organizing files")
-    audio_cleaner = _build_audio_cleaner(log, enable=enable_profanity_cleaning, copy_mode=copy_mode)
-    processed = move_audio_book_files(
-        audio_file_extension=ext,
-        books_json_path=json_path,
-        copy_instead_of_move=copy_mode,
-        destination_dir=dest,
-        download_program="Libation",
-        libation_folder_cleanup=cleanup,
-        log_file=log,
+    cfg = _build_config(
+        library=library, source_dir=source_dir, destination_dir=destination_dir,
+        audio_file_extension=audio_file_extension, copy_instead_of_move=copy_instead_of_move,
+        libation_folder_cleanup=libation_folder_cleanup,
+        libation_file_locations_path=libation_file_locations_path,
+        enable_profanity_cleaning=enable_profanity_cleaning,
         purchased_how_long_ago=purchased_how_long_ago,
-        source_dir=src,
-        libation_file_locations_path=file_loc,
-        audio_cleaner=audio_cleaner,
+        abs_server_url=abs_server_url, abs_library_id=abs_library_id,
+        abs_api_token=abs_api_token, libation_cli=libation_cli, asins=asins,
     )
-    results["processed_books"] = [b.get("title", "Unknown") for b in processed]
+    results = {}
 
-    if processed:
-        LOGGER.info("Step 5: Scanning ABS")
-        scan_library_for_books(url, lib_id, token, log)
-        time.sleep(15)
+    LOGGER.info("Step 1/6: Scanning Audible library")
+    results["scan"] = step_scan(cfg)
 
-        LOGGER.info("Step 6: Matching in ABS")
-        all_books = get_all_books(url, lib_id, token, log)
-        recent = get_audio_bookshelf_recent_books(all_books, log, book_list=processed)
-        match_results = process_audio_books(recent, url, token, log)
-        results["abs_matches"] = len(match_results)
+    LOGGER.info("Step 2/6: Downloading books")
+    results["download"] = step_download(cfg)
+
+    LOGGER.info("Step 3/6: Exporting library metadata")
+    results["export"] = step_export(cfg)
+
+    LOGGER.info("Step 4/6: Organizing files")
+    organize_result = step_organize(cfg)
+    results["organize"] = {k: v for k, v in organize_result.items() if not k.startswith("_")}
+    book_list = organize_result.get("_book_list", [])
+
+    if book_list:
+        LOGGER.info("Step 5/6: Scanning ABS")
+        results["scan_abs"] = step_scan_abs(cfg)
+
+        LOGGER.info("Step 6/6: Matching in ABS")
+        results["match"] = step_match(cfg, book_list=book_list)
     else:
-        results["abs_matches"] = "skipped (no new books)"
+        results["scan_abs"] = "skipped (no new books)"
+        results["match"] = "skipped (no new books)"
 
-    results["log"] = log.getvalue()
     return json.dumps(results, indent=2)
 
 
@@ -575,6 +883,138 @@ def get_status(
         status["abs_status"] = "not configured"
 
     return json.dumps(status, indent=2)
+
+
+@mcp.tool()
+def list_abs_library(
+    library: str | None = None,
+    abs_server_url: str | None = None,
+    abs_library_id: str | None = None,
+    abs_api_token: str | None = None,
+) -> str:
+    """List all items currently in an AudioBookShelf library.
+
+    Use after scan_audiobookshelf or match_audiobookshelf to verify
+    books are present with correct metadata.
+
+    Args:
+        library: Library name from libraries.yaml (e.g. 'kids', 'adult').
+        abs_server_url: Override ABS server URL.
+        abs_library_id: Override ABS library ID.
+        abs_api_token: Override ABS API token.
+    """
+    lib = _resolve_library(library)
+    url = abs_server_url or lib["abs_server_url"]
+    lib_id = abs_library_id or lib["library_id"]
+    token = abs_api_token or lib["abs_api_token"]
+    headers = _abs_headers(token)
+
+    resp = requests.get(
+        f"{url}/api/libraries/{lib_id}/items",
+        headers=headers,
+        params={"limit": 0, "sort": "addedAt"},
+        timeout=30,
+    )
+    if not resp.ok:
+        return json.dumps({"error": f"HTTP {resp.status_code}", "body": resp.text})
+
+    items = resp.json().get("results", [])
+    summary = [
+        {
+            "id": item["id"],
+            "title": item.get("media", {}).get("metadata", {}).get("title", ""),
+            "author": item.get("media", {}).get("metadata", {}).get("authorName", ""),
+            "series": _extract_series_names(item),
+            "duration": round(item.get("media", {}).get("duration", 0) / 60, 1),
+            "added_at": item.get("addedAt", ""),
+            "has_audio": bool(item.get("media", {}).get("audioFiles")),
+        }
+        for item in items
+    ]
+    return json.dumps({"total": len(summary), "items": summary}, indent=2)
+
+
+def _extract_series_names(item: dict) -> str:
+    """Extract series names from an ABS library item."""
+    series_list = item.get("media", {}).get("metadata", {}).get("series", [])
+    if isinstance(series_list, list):
+        return ", ".join(s.get("name", "") for s in series_list if s.get("name"))
+    return ""
+
+
+@mcp.tool()
+def get_source_status(
+    source_dir: str | None = None,
+    destination_dir: str | None = None,
+    library: str | None = None,
+) -> str:
+    """Inspect the Libation source and ABS destination directories.
+
+    Shows file counts, extensions present, total sizes, and individual
+    book folders. Use to verify downloads completed and detect extension
+    mismatches before calling organize_books.
+
+    Args:
+        source_dir: Libation books directory (default: from .env).
+        destination_dir: ABS audiobooks directory (default: from library config).
+        library: Library name to resolve destination_dir.
+    """
+    lib = _resolve_library(library)
+    src = _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY")
+    dest = destination_dir or lib["destination_dir"]
+
+    result: dict = {}
+    result["source"] = _scan_directory(src, "source")
+    if dest:
+        result["destination"] = _scan_directory(dest, "destination")
+    return json.dumps(result, indent=2)
+
+
+def _scan_directory(dir_path: str, label: str) -> dict:
+    """Scan a directory for audio book folders, files, and extensions."""
+    base = Path(dir_path)
+    info: dict = {"path": dir_path, "exists": base.is_dir()}
+    if not base.is_dir():
+        return info
+
+    audio_exts = {".m4b", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wma", ".aac"}
+    folders = []
+    ext_counts: dict[str, int] = {}
+    total_size = 0
+
+    for child in sorted(base.iterdir()):
+        if child.is_dir():
+            folder_info = _scan_book_folder(child, audio_exts, ext_counts)
+            total_size += folder_info.get("size", 0)
+            folders.append(folder_info)
+
+    info["folder_count"] = len(folders)
+    info["extensions"] = ext_counts
+    info["total_audio_size_mb"] = round(total_size / (1024 * 1024), 1)
+    info["folders"] = folders
+    return info
+
+
+def _scan_book_folder(
+    folder: Path,
+    audio_exts: set[str],
+    ext_counts: dict[str, int],
+) -> dict:
+    """Scan a single book folder for audio files."""
+    audio_files = []
+    folder_size = 0
+    for f in folder.rglob("*"):
+        if f.is_file() and f.suffix.lower() in audio_exts:
+            audio_files.append(f.name)
+            folder_size += f.stat().st_size
+            ext = f.suffix.lower()
+            ext_counts[ext] = ext_counts.get(ext, 0) + 1
+    return {
+        "name": folder.name,
+        "audio_files": audio_files,
+        "size": folder_size,
+        "size_mb": round(folder_size / (1024 * 1024), 1),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1024,6 +1464,6 @@ def download_podcast_files(
 
 
 if __name__ == "__main__":
-    transport = _env("MCP_TRANSPORT", "sse")
+    transport = _env("MCP_TRANSPORT", "streamable-http")
     LOGGER.info("Starting Audiobook Ingestion MCP (%s)", transport)
     mcp.run(transport=transport)

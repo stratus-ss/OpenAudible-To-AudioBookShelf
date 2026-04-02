@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
+import io
 import json
+import logging
 import os
 import shutil
+import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -9,8 +12,12 @@ from modules.audio_bookshelf import (get_all_books, get_audio_bookshelf_recent_b
                                      scan_library_for_books)
 from modules.audio_cleaner import AudioCleaner
 from modules.config import Config
-from modules.utils import (_parse_date, find_existing_series_folder, generate_libation_json, 
+from modules.utils import (_parse_date, find_existing_series_folder, generate_libation_json,
                            make_directory_structure, sanitize_name, get_timestamped_log_path)
+
+LOGGER = logging.getLogger(__name__)
+
+VALID_STEPS = ("scan", "download", "export", "organize", "scan-abs", "match")
 
 
 def process_open_audible_book_json(book_data: dict) -> dict:
@@ -142,9 +149,8 @@ def move_audio_book_files(
         with open(books_json_path, "r") as file:
             books: list[dict] = json.load(file)
     except (IOError, json.JSONDecodeError) as e:
-
         log_file.write(f"{datetime.now()} - Error reading JSON file: {e}")
-        exit(1)
+        raise RuntimeError(f"Error reading JSON file: {e}") from e
 
     # Load file locations if provided (for Libation)
     file_locations = None
@@ -242,23 +248,188 @@ def move_audio_book_files(
     return books_to_process_in_audio_bookself
 
 
+# ---------------------------------------------------------------------------
+# Step functions — each runs one phase and returns a result dict
+# ---------------------------------------------------------------------------
+
+def _run_libationcli(args: list[str], timeout: int = 600, cli_path: str = "libationcli") -> dict:
+    """Run a libationcli subcommand and return structured results."""
+    cmd = [cli_path] + args
+    LOGGER.info("Running: %s", " ".join(cmd))
+    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
+    return {
+        "success": result.returncode == 0,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+    }
+
+
+def step_scan(config: Config) -> dict:
+    """Refresh the Audible library list via libationcli scan."""
+    cli = getattr(config, "libation_cli", "libationcli")
+    result = _run_libationcli(["scan"], cli_path=cli)
+    return {"step": "scan", "success": result["success"], "detail": result}
+
+
+def step_download(config: Config) -> dict:
+    """Download/decrypt books via libationcli liberate."""
+    cli = getattr(config, "libation_cli", "libationcli")
+    args = ["liberate"]
+    asins = getattr(config, "asins", None)
+    if asins:
+        args.extend(asins)
+    result = _run_libationcli(args, timeout=3600, cli_path=cli)
+    return {
+        "step": "download",
+        "success": result["success"],
+        "asins": asins or [],
+        "source_dir": config.source_audio_book_directory,
+        "detail": result,
+    }
+
+
+def step_export(config: Config) -> dict:
+    """Export Libation library metadata to libation.json."""
+    cli = getattr(config, "libation_cli", "libationcli")
+    json_path = getattr(config, "books_json_path", "")
+    if not json_path or "OpenAudible" in json_path:
+        json_path = os.path.join(config.source_audio_book_directory, "libation.json")
+    result = _run_libationcli(
+        ["export", "--path", json_path, "--json"], cli_path=cli
+    )
+    return {
+        "step": "export",
+        "success": result["success"],
+        "json_path": json_path,
+        "detail": result,
+    }
+
+
+def step_organize(config: Config, log_file=None) -> dict:
+    """Move/copy audio files into the Author/Series/Title directory tree."""
+    if log_file is None:
+        log_file = io.StringIO()
+
+    json_path = getattr(config, "books_json_path", "")
+    if not json_path or "OpenAudible" in json_path:
+        json_path = os.path.join(config.source_audio_book_directory, "libation.json")
+
+    audio_cleaner = None
+    if getattr(config, "enable_profanity_cleaning", False):
+        audio_cleaner = AudioCleaner(config, log_file)
+
+    processed = move_audio_book_files(
+        audio_file_extension=config.audio_file_extension,
+        books_json_path=json_path,
+        copy_instead_of_move=config.copy_instead_of_move,
+        destination_dir=config.destination_book_directory,
+        download_program=getattr(config, "download_program", "Libation"),
+        libation_folder_cleanup=getattr(config, "libation_folder_cleanup", False),
+        log_file=log_file,
+        purchased_how_long_ago=getattr(config, "purchased_how_long_ago", 0),
+        source_dir=config.source_audio_book_directory,
+        libation_file_locations_path=getattr(config, "libation_file_locations_path", ""),
+        audio_cleaner=audio_cleaner,
+    )
+
+    if audio_cleaner:
+        audio_cleaner.log_statistics()
+        audio_cleaner.cleanup_working_directory()
+
+    moved = [b.get("title", "Unknown") for b in processed]
+    log_content = log_file.getvalue() if isinstance(log_file, io.StringIO) else ""
+    return {
+        "step": "organize",
+        "success": True,
+        "processed_count": len(processed),
+        "moved": moved,
+        "destination_dir": config.destination_book_directory,
+        "log": log_content,
+        "_book_list": processed,
+    }
+
+
+def step_scan_abs(config: Config, log_file=None, wait: int = 15) -> dict:
+    """Trigger an ABS library scan and wait for it to settle."""
+    if log_file is None:
+        log_file = io.StringIO()
+    resp = scan_library_for_books(
+        config.server_url, config.library_id, config.abs_api_token, log_file
+    )
+    time.sleep(wait)
+    return {
+        "step": "scan-abs",
+        "success": resp.ok,
+        "status_code": resp.status_code,
+        "wait_seconds": wait,
+    }
+
+
+def step_match(config: Config, book_list: list | None = None, log_file=None) -> dict:
+    """Match ABS library items to Audible metadata."""
+    if log_file is None:
+        log_file = io.StringIO()
+    all_books = get_all_books(
+        config.server_url, config.library_id, config.abs_api_token, log_file
+    )
+    recent = get_audio_bookshelf_recent_books(
+        all_books,
+        log_file,
+        days_ago=getattr(config, "purchased_how_long_ago", 7),
+        book_list=book_list or [],
+    )
+    results = process_audio_books(recent, config.server_url, config.abs_api_token, log_file)
+    log_content = log_file.getvalue() if isinstance(log_file, io.StringIO) else ""
+    return {
+        "step": "match",
+        "success": True,
+        "matched_count": len(results),
+        "log": log_content,
+    }
+
+
+_STEP_DISPATCH = {
+    "scan": step_scan,
+    "download": step_download,
+    "export": step_export,
+    "organize": step_organize,
+    "scan-abs": step_scan_abs,
+    "match": step_match,
+}
+
+
+def run_step(step_name: str, config: Config, **kwargs) -> dict:
+    """Run a single named pipeline step and return its result dict."""
+    fn = _STEP_DISPATCH.get(step_name)
+    if fn is None:
+        raise ValueError(f"Unknown step: {step_name!r}. Valid: {', '.join(VALID_STEPS)}")
+    return fn(config, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# main — full pipeline or single step via --step
+# ---------------------------------------------------------------------------
+
 def main(*args: str):
-    # Parse command line arguments
     args = Config.from_args(*args)
     if args.generate_yaml:
         args.generate_yaml_from_parser(file_path="/tmp/arguments.yaml")
-        exit()
-    
-    # Add timestamp to log file path for unique log per run
+        return
+
+    step = getattr(args, "step", None)
+    if step:
+        result = run_step(step, args)
+        clean = {k: v for k, v in result.items() if not k.startswith("_")}
+        print(json.dumps(clean, indent=2))
+        return
+
     timestamped_log_path = get_timestamped_log_path(args.log_file_path)
     try:
         log_file = open(timestamped_log_path, "a")
         print(f"Logging to: {timestamped_log_path}")
     except IOError as e:
-        print(f"Error opening log file: {e}")
-        exit(1)
+        raise RuntimeError(f"Error opening log file: {e}") from e
 
-    # Auto-generate libation.json if using Libation and the file doesn't exist
     if args.download_program == "Libation" and not os.path.exists(args.books_json_path):
         log_file.write(
             f"{datetime.now()} - INFO - Libation JSON file not found at {args.books_json_path}. "
@@ -266,7 +437,6 @@ def main(*args: str):
         )
         log_file.flush()
 
-        # If books_json_path is the default OpenAudible path, use source-audio-book-directory instead
         if "OpenAudible" in args.books_json_path:
             args.books_json_path = os.path.join(args.source_audio_book_directory, "libation.json")
             log_file.write(
@@ -283,21 +453,17 @@ def main(*args: str):
                 f"libationcli export --path {args.books_json_path} --json\n"
             )
             log_file.close()
-            print(
-                f"ERROR: Failed to auto-generate libation.json. "
+            raise RuntimeError(
+                f"Failed to auto-generate libation.json. "
                 f"Please run: libationcli export --path {args.books_json_path} --json"
             )
-            exit(1)
 
-    # Initialize AudioCleaner if profanity cleaning is enabled
     audio_cleaner = None
     if getattr(args, 'enable_profanity_cleaning', False):
         audio_cleaner = AudioCleaner(args, log_file)
         log_file.write(f"{datetime.now()} - INFO - Profanity cleaning enabled\n")
         log_file.flush()
 
-    # This will process any files in the OpenAudible directory that is 7 days or newer
-    # According to current date as compared to the purchase date
     book_list = move_audio_book_files(
         args.audio_file_extension,
         args.books_json_path,
@@ -312,14 +478,9 @@ def main(*args: str):
         audio_cleaner,
     )
 
-    # Now that the files have been moved, we want to kick off the AudioBookShelf scanner
     scan_library_for_books(args.server_url, args.library_id, args.abs_api_token, log_file)
-
-    # We often need a back-off time in order to allow the scan to complete
     time.sleep(15)
 
-    # Sometimes the scanner does not identify the books correctly
-    # In my case I buy books from audible so I want to force the match with audible content
     books_from_audiobookshelf = get_all_books(args.server_url, args.library_id, args.abs_api_token, log_file)
     most_recent_books = get_audio_bookshelf_recent_books(
         books_from_audiobookshelf,
@@ -327,13 +488,12 @@ def main(*args: str):
         days_ago=args.purchased_how_long_ago,
         book_list=book_list,
     )
-    _ = process_audio_books(most_recent_books, args.server_url, args.abs_api_token, log_file)
-    
-    # Log profanity cleaning statistics and cleanup if enabled
+    process_audio_books(most_recent_books, args.server_url, args.abs_api_token, log_file)
+
     if audio_cleaner:
         audio_cleaner.log_statistics()
         audio_cleaner.cleanup_working_directory()
-    
+
     log_file.close()
 
 

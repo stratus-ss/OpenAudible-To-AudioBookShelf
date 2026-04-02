@@ -1,10 +1,10 @@
 # Audiobook Ingestion MCP Server
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes the OpenAudible-To-AudioBookShelf pipeline as tools for AI agents. It automates downloading audiobooks from Audible via [Libation](https://getlibation.com/), organizing them into an Author/Series/Title folder hierarchy, and ingesting them into [AudioBookShelf (ABS)](https://www.audiobookshelf.org/).
+An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that exposes the Import-To-AudioBookShelf pipeline as tools for AI agents. It automates downloading audiobooks from Audible via [Libation](https://getlibation.com/), organizing them into an Author/Series/Title folder hierarchy, and ingesting them into [AudioBookShelf (ABS)](https://www.audiobookshelf.org/).
 
 Supports **multiple libraries** (e.g. kids books, adult books, podcasts) via a YAML registry, and includes **podcast tools** for searching, subscribing, and downloading podcast episodes -- including a manual download fallback for podcasts without public RSS feeds.
 
-Supports SSE transport (for remote/network use with Moltis, Cursor, Claude Code) and stdio transport (for local use with Cursor, Claude Code).
+Supports Streamable HTTP (default), SSE, and stdio transports for remote and local use with Cursor, Claude Code, and other MCP clients.
 
 ---
 
@@ -43,8 +43,8 @@ Configure Libation with your Audible account credentials. Run `libationcli scan`
 ### Step 2: Clone the Repository and Create a Virtual Environment
 
 ```bash
-git clone https://github.com/stratus-ss/OpenAudible-To-AudioBookShelf.git
-cd OpenAudible-To-AudioBookShelf
+git clone https://github.com/stratus-ss/Import-To-AudioBookShelf.git
+cd Import-To-AudioBookShelf
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -144,7 +144,7 @@ Tools then accept a `library` parameter (e.g. `library="kids"`) instead of raw U
 **SSE mode (remote/network access -- default):**
 
 ```bash
-cd /path/to/OpenAudible-To-AudioBookShelf
+cd /path/to/Import-To-AudioBookShelf
 source venv/bin/activate
 MCP_ENV_FILE=abs-mcp/.env venv/bin/python abs-mcp/mcp_server.py
 # Listening on http://0.0.0.0:8765
@@ -170,11 +170,11 @@ The server runs on the same machine as Cursor. Add to `~/.cursor/mcp.json` under
 ```json
 {
   "audiobook-ingestion": {
-    "command": "/path/to/OpenAudible-To-AudioBookShelf/venv/bin/python",
-    "args": ["/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/mcp_server.py"],
+    "command": "/path/to/Import-To-AudioBookShelf/venv/bin/python",
+    "args": ["/path/to/Import-To-AudioBookShelf/abs-mcp/mcp_server.py"],
     "env": {
       "MCP_TRANSPORT": "stdio",
-      "MCP_ENV_FILE": "/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/.env"
+      "MCP_ENV_FILE": "/path/to/Import-To-AudioBookShelf/abs-mcp/.env"
     }
   }
 }
@@ -200,11 +200,11 @@ Add to `~/.claude/settings.json` (or project `.mcp.json`):
 {
   "mcpServers": {
     "audiobook-ingestion": {
-      "command": "/path/to/OpenAudible-To-AudioBookShelf/venv/bin/python",
-      "args": ["/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/mcp_server.py"],
+      "command": "/path/to/Import-To-AudioBookShelf/venv/bin/python",
+      "args": ["/path/to/Import-To-AudioBookShelf/abs-mcp/mcp_server.py"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "MCP_ENV_FILE": "/path/to/OpenAudible-To-AudioBookShelf/abs-mcp/.env"
+        "MCP_ENV_FILE": "/path/to/Import-To-AudioBookShelf/abs-mcp/.env"
       }
     }
   }
@@ -319,15 +319,22 @@ Audible Cloud
 
 ### Pipeline Flow
 
-The `ingest_books` tool runs this full sequence:
+The pipeline has six discrete steps. Each step has a dedicated MCP tool and can also be invoked from the CLI via `--step`. LLM agents should call each step tool individually for reliability; the `ingest_books` tool runs all steps sequentially but can timeout on long operations.
 
-1. `libationcli scan` -- refresh Audible library metadata
-2. `libationcli liberate [ASINs]` -- download/decrypt audiobooks
-3. `libationcli export` -- regenerate `libation.json`
-4. `move_audio_book_files()` -- copy/move `.m4b` files into `Author/Series/Title` folders
-5. ABS library scan -- makes ABS discover the new files
-6. ABS match -- matches each new item to Audible metadata (cover art, description, narrator)
-7. Series metadata patch -- explicitly sets the correct series name and sequence via the ABS API (fixes underscore artifacts from filesystem sanitization)
+1. **scan_audible** -- `libationcli scan` -- refresh Audible library metadata
+2. **download_books** -- `libationcli liberate [ASINs]` -- download/decrypt audiobooks
+3. **export_library** -- `libationcli export` -- regenerate `libation.json`
+4. **organize_books** -- copy/move audio files into `Author/Series/Title` folders
+5. **scan_audiobookshelf** -- ABS library scan -- makes ABS discover the new files
+6. **match_audiobookshelf** -- ABS match -- matches each new item to Audible metadata
+
+Additional discovery and management tools:
+
+- **list_library** -- browse/filter the Audible library (by status, author, title, duration)
+- **list_abs_library** -- verify what's currently in AudioBookShelf
+- **get_source_status** -- inspect source/destination directories (file counts, extensions, sizes)
+- **set_book_status** -- mark books as unliberated to force re-download
+- **delete_library_items** -- remove ABS items with optional disk file cleanup
 
 ### Environment Variables
 
@@ -374,19 +381,21 @@ The `ingest_books` tool runs this full sequence:
 
 | Variable | Description | Default |
 |---|---|---|
-| `MCP_TRANSPORT` | Transport protocol (`sse` or `stdio`) | `sse` |
+| `MCP_TRANSPORT` | Transport protocol (`streamable-http`, `sse`, or `stdio`) | `streamable-http` |
 | `MCP_HOST` | Listen address | `0.0.0.0` |
 | `MCP_PORT` | Listen port | `8765` |
 
 ### Available Tools
 
-#### list_libraries
+#### Discovery & Status
+
+##### list_libraries
 
 List all configured libraries with their names, types, and IDs. Use this first to discover what libraries are available.
 
 No parameters.
 
-#### get_status
+##### get_status
 
 Pipeline status and ABS connectivity check. Returns source/destination paths, ABS server version, and connection health.
 
@@ -399,28 +408,86 @@ Pipeline status and ABS connectivity check. Returns source/destination paths, AB
 | `abs_library_id` | str | ABS library UUID |
 | `abs_api_token` | str | ABS API bearer token |
 
-#### list_library
+##### list_library
 
-List all books in the Audible library from Libation's JSON export. Returns ASIN, title, author, series, and date added for each book.
+List books in the Audible library from Libation's JSON export with optional filtering. Returns ASIN, title, author, series, duration, status, and date added.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `source_dir` | str | Libation books directory |
+| `status` | str | Filter by BookStatus (e.g. `NotLiberated`, `Liberated`) |
+| `author` | str | Filter by author name (case-insensitive substring) |
+| `title` | str | Filter by title (case-insensitive substring) |
+| `max_duration` | int | Only books shorter than this many minutes |
+| `min_duration` | int | Only books longer than this many minutes |
+| `limit` | int | Max results to return (0 = all) |
+| `sort_by` | str | Sort field: `duration`, `title`, `author`, `date_added` |
 
-#### download_books
+##### list_abs_library
 
-Download audiobooks from Audible via `libationcli`. Runs scan, liberate, and export steps.
+List all items currently in an AudioBookShelf library. Returns item ID, title, author, series, duration, and whether audio is present. Use after ingestion to verify books landed correctly.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `library` | str | Library name from libraries.yaml |
+| `abs_server_url` | str | ABS server URL |
+| `abs_library_id` | str | ABS library UUID |
+| `abs_api_token` | str | ABS API bearer token |
+
+##### get_source_status
+
+Inspect the Libation source and ABS destination directories. Shows folder names, audio file counts, file extensions present, and sizes. Use after downloading to verify files arrived and detect extension mismatches (e.g. `.mp3` vs `.m4b`).
+
+| Parameter | Type | Description |
+|---|---|---|
+| `source_dir` | str | Libation books directory |
+| `destination_dir` | str | ABS audiobooks directory |
+| `library` | str | Library name to resolve destination_dir |
+
+#### Ingestion Pipeline
+
+##### scan_audible
+
+Refresh the Audible library list via Libation (~10 seconds). Run before `download_books` to ensure the listing is current.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `libation_cli` | str | Path to libationcli binary |
+
+##### set_book_status
+
+Set the download status of books in Libation's database. Use `status="not-downloaded"` to mark books as unliberated so they can be re-downloaded with `download_books`.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `asins` | list[str] | **(required)** Product IDs (ASINs) of books to update |
+| `status` | str | `not-downloaded` or `downloaded` (default: `not-downloaded`) |
+| `force` | bool | Set status even if the audio file exists on disk (default: true) |
+| `libation_cli` | str | Path to libationcli binary |
+
+##### download_books
+
+Download audiobooks from Audible via `libationcli liberate`. Pass specific ASINs or omit to download all un-downloaded books.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `asins` | list[str] | ASINs to download (empty = all new) |
-| `force` | bool | Force re-download |
+| `libation_cli` | str | Path to libationcli binary |
+
+##### export_library
+
+Export Libation library metadata to `libation.json`. Run after `download_books` so the JSON reflects newly downloaded titles.
+
+| Parameter | Type | Description |
+|---|---|---|
 | `source_dir` | str | Libation books directory |
 | `libation_cli` | str | Path to libationcli binary |
 
-#### process_books
+##### organize_books
 
-Organize downloaded audiobooks into `Author/Series/Title` hierarchy on the destination filesystem. Reads `libation.json`, filters by purchase date, copies/moves `.m4b` files.
+Organize downloaded audiobooks into `Author/Series/Title` hierarchy on the destination filesystem. Reads `libation.json`, filters by purchase date, copies/moves audio files.
+
+Default audio format is `.m4b`. If no `.m4b` files are found in the source directory, the tool auto-detects the actual extension present (e.g. `.mp3`). The detected extension is included in the response. Pass `audio_file_extension` explicitly only if you specifically need a non-default format.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -428,38 +495,40 @@ Organize downloaded audiobooks into `Author/Series/Title` hierarchy on the desti
 | `library` | str | Library name (e.g. 'kids', 'adult') |
 | `source_dir` | str | Libation books directory |
 | `destination_dir` | str | ABS audiobooks directory / NFS mount |
-| `audio_file_extension` | str | e.g. `.m4b`, `.mp3` |
+| `audio_file_extension` | str | Override extension (default: `.m4b`, auto-detects if not found) |
 | `copy_instead_of_move` | bool | Copy files instead of moving |
 | `libation_folder_cleanup` | bool | Delete Libation source folders after move |
 | `libation_file_locations_path` | str | Path to Libation FileLocationsV2.json |
 | `enable_profanity_cleaning` | bool | Toggle monkeyplug filtering |
 
-#### scan_audiobookshelf
+##### scan_audiobookshelf
 
-Trigger an ABS library scan. ABS discovers new/changed/removed files on disk.
+Trigger an ABS library scan and wait for it to settle. Run after `organize_books` so ABS discovers the new files.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `library` | str | Library name (e.g. 'kids', 'adult_podcasts') |
+| `wait` | int | Seconds to wait after triggering scan (default: 15) |
 | `abs_server_url` | str | ABS server URL |
 | `abs_library_id` | str | ABS library UUID |
 | `abs_api_token` | str | ABS API bearer token |
 
-#### match_audiobookshelf
+##### match_audiobookshelf
 
-Match recently added ABS items to Audible metadata (cover art, description, narrator, series). Uses `short_title` for matching to handle subtitle differences between filesystem names and ABS-parsed titles.
+Match recently added ABS items to Audible metadata (cover art, description, narrator, series).
 
 | Parameter | Type | Description |
 |---|---|---|
-| `days_ago` | int | Match items added within this many days |
+| `days_ago` | int | Match items added within this many days (default: 7) |
 | `library` | str | Library name (e.g. 'kids', 'adult') |
+| `book_list` | list[dict] | Specific books to match (output from organize_books) |
 | `abs_server_url` | str | ABS server URL |
 | `abs_library_id` | str | ABS library UUID |
 | `abs_api_token` | str | ABS API bearer token |
 
-#### ingest_books
+##### ingest_books
 
-End-to-end pipeline: download -> organize -> scan ABS -> match metadata -> update series. This is the primary tool for routine use.
+End-to-end pipeline: scan -> download -> export -> organize -> scan ABS -> match. Runs all six steps sequentially. **WARNING:** Can take 30+ minutes and may timeout. LLM agents should prefer calling individual step tools.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -478,15 +547,19 @@ End-to-end pipeline: download -> organize -> scan ABS -> match metadata -> updat
 | `abs_library_id` | str | ABS library UUID |
 | `abs_api_token` | str | ABS API bearer token |
 
-#### delete_library_items
+#### Library Management
 
-Delete items from the ABS library by ID or purge everything. ABS retains database entries even after files are removed from disk; use this tool to fully clean up.
+##### delete_library_items
+
+Delete items from the ABS library by ID or purge everything. Optionally removes audio files from both the destination and source directories.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `item_ids` | list[str] | Specific ABS item IDs to delete |
 | `delete_all` | bool | If true, delete every item in the library |
+| `cleanup_files` | bool | Also remove audio files from destination and source directories |
 | `library` | str | Library name (e.g. 'kids', 'adult') |
+| `source_dir` | str | Libation source directory to clean |
 | `abs_server_url` | str | ABS server URL |
 | `abs_library_id` | str | ABS library UUID |
 | `abs_api_token` | str | ABS API bearer token |
@@ -571,15 +644,32 @@ Download audio files from URLs into an ABS podcast directory. Use when ABS canno
 
 ### Common Workflows
 
-**Ingest all new books to the kids library:**
+**Step-by-step ingestion (recommended for LLM agents):**
+
+```
+list_libraries()                                              # discover libraries
+list_library(status="NotLiberated", limit=10, sort_by="duration")  # find books to download
+scan_audible()                                                # refresh Audible library
+download_books(asins=["B0C24R5GP1", "B09H7QBMGX"])           # download specific books
+get_source_status(library="kids")                             # verify downloads, check extension
+export_library()                                              # refresh libation.json
+organize_books(library="kids", purchased_how_long_ago=0)      # auto-detects .m4b or .mp3
+scan_audiobookshelf(library="kids")                           # trigger ABS scan
+match_audiobookshelf(library="kids")                          # match to Audible metadata
+list_abs_library(library="kids")                              # verify books in ABS
+```
+
+**Force re-download a book:**
+
+```
+set_book_status(asins=["B0C24R5GP1"], status="not-downloaded")
+download_books(asins=["B0C24R5GP1"])
+```
+
+**Quick ingest (end-to-end, may timeout for large libraries):**
 
 ```
 ingest_books(library="kids")
-```
-
-**Ingest specific books to the adult library:**
-
-```
 ingest_books(asins=["B0C24R5GP1"], library="adult")
 ```
 
@@ -605,15 +695,18 @@ download_podcast_files(urls=["https://...mp3"], podcast_name="Under The Hood sho
 download_podcast_files(urls=["https://...mp3"], podcast_name="My Podcast", library="adult_podcasts")
 ```
 
-**Clean up after testing:**
+**Clean up after testing (with disk file removal):**
 
 ```
-delete_library_items(delete_all=true, library="kids")
+delete_library_items(delete_all=true, cleanup_files=true, library="kids")
+get_source_status(library="kids")  # verify clean
 ```
 
 ### Known Behaviors
 
+- **Audio format auto-detection:** The default audio format is `.m4b`. Some Audible content (e.g. short episodes, podcasts) downloads as `.mp3`. The `organize_books` tool auto-detects the actual extension in the source directory when `.m4b` files aren't found, so you don't need to manually specify it. The detected extension is returned in the response. Use `get_source_status` to inspect file types before organizing.
 - **Filesystem sanitization:** Author and series folder names replace spaces with underscores (e.g. `Ben's Damn Adventure` becomes `Bens_Damn_Adventure`). The pipeline corrects this by explicitly patching series metadata via the ABS API after matching.
 - **Title matching:** ABS may parse titles differently than the original metadata (e.g. appending "Unabridged"). The pipeline uses `short_title` (the main title without subtitle) for matching to handle this.
-- **ABS item persistence:** Deleting files from disk and rescanning does **not** remove items from the ABS database. Use `delete_library_items` for full cleanup.
+- **ABS item persistence:** Deleting files from disk and rescanning does **not** remove items from the ABS database. Use `delete_library_items` with `cleanup_files=true` for full cleanup (removes ABS entries, destination files, and source files).
+- **Re-downloading books:** Libation tracks which books have been downloaded. To force a re-download, use `set_book_status(asins=[...], status="not-downloaded")` before calling `download_books`.
 - **Libation chapter splitting:** If Libation is configured with `SplitFilesByChapter: true`, it produces many small `.m4b` files per book instead of one. The pipeline expects single-file output. Ensure `SplitFilesByChapter` is `false` in Libation's `Settings.json`.

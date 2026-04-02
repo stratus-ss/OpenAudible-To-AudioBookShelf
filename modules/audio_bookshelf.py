@@ -1,8 +1,28 @@
-import subprocess
+import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
 import requests
+
+LOGGER = logging.getLogger(__name__)
+ABS_HTTP_TIMEOUT = 30
+
+
+def _desktop_notify(summary: str, body: str) -> None:
+    """Send a desktop notification if a display is available."""
+    if os.environ.get("DISABLE_NOTIFICATIONS") or not os.environ.get("DISPLAY"):
+        return
+    try:
+        import subprocess
+        subprocess.run(
+            ["notify-send", summary, body],
+            timeout=5,
+            check=False,
+            capture_output=True,
+        )
+    except Exception:
+        LOGGER.debug("Desktop notification skipped (notify-send unavailable)")
 
 
 def scan_library_for_books(server_url: str, library_id: str, abs_api_token: str, log_file=None) -> requests.Response:
@@ -22,6 +42,7 @@ def scan_library_for_books(server_url: str, library_id: str, abs_api_token: str,
     response = requests.post(
         f"{server_url}/api/libraries/{library_id}/scan",
         headers={"Authorization": f"Bearer {abs_api_token}"},
+        timeout=ABS_HTTP_TIMEOUT,
     )
     if log_file:
         log_file.write(f"Scan_results: {response}")
@@ -43,8 +64,10 @@ def get_all_books(server_url: str, library_id: str, abs_api_token: str, log_file
     if log_file:
         log_file.write("Fetching the library from Audio BookShelf...\n")
     return requests.get(
-        f"{server_url}/api/libraries/{library_id}/items?sort=addedAt",
+        f"{server_url}/api/libraries/{library_id}/items",
         headers={"Authorization": f"Bearer {abs_api_token}"},
+        params={"sort": "addedAt", "limit": 0},
+        timeout=ABS_HTTP_TIMEOUT,
     )
 
 
@@ -126,6 +149,7 @@ def update_book_series(
         f"{server_url}/api/items/{item_id}/media",
         json=payload,
         headers={"Authorization": f"Bearer {abs_api_token}"},
+        timeout=ABS_HTTP_TIMEOUT,
     )
     if log_file:
         status = "success" if response.ok else f"failed ({response.status_code})"
@@ -156,28 +180,18 @@ def process_audio_books(todays_items: list[dict], server_url: str, abs_api_token
             api_url,
             json=match_payload,
             headers={"Authorization": f"Bearer {abs_api_token}"},
+            timeout=ABS_HTTP_TIMEOUT,
         )
         results.append(output.json())
+        title = item['media']['metadata']['title']
         if output.ok:
-            log_file.write(f"Finished Matching {item['media']['metadata']['title']} using the Audible Provider\n")
+            log_file.write(f"Finished Matching {title} using the Audible Provider\n")
             series_name = item.get("_original_series", "")
             volume_number = item.get("_original_volume", "")
             if series_name:
                 update_book_series(item["id"], series_name, volume_number, server_url, abs_api_token, log_file)
-            subprocess.run(
-                [
-                    "notify-send",
-                    "Audio Bookself",
-                    f"Processing {item['media']['metadata']['title']}",
-                ]
-            )
+            _desktop_notify("Audio Bookshelf", f"Processing {title}")
         else:
-            subprocess.run(
-                [
-                    "notify-send",
-                    "Error",
-                    f"Error with {item['media']['metadata']['title']}",
-                ]
-            )
+            _desktop_notify("Error", f"Error with {title}")
         time.sleep(2)
     return results
