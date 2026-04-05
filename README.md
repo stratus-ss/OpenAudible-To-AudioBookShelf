@@ -7,7 +7,7 @@
 
 This script automates the process of moving audiobook files from OpenAudible or Libation to an organized folder structure and updates AudioBookShelf accordingly. It handles file organization, metadata mapping, and interaction with the AudioBookShelf API.
 
-> **Note for MCP Server Users:** The included [MCP server](abs-mcp/README.md) **only supports Libation**, not OpenAudible. OpenAudible lacks reliable CLI automation capabilities required for AI agent orchestration. Use Libation with `libationcli` for MCP/AI workflows.
+> **Note for MCP Server Users:** The included [MCP server](abs-mcp/README.md) **only supports Libation**, not OpenAudible. OpenAudible lacks reliable CLI automation capabilities required for AI agent orchestration. Use Libation with `libationcli` for MCP/AI workflows. MCP lookups parse full library JSON server-side and return filtered matches directly.
 
 ## Features
 
@@ -22,7 +22,30 @@ This script automates the process of moving audiobook files from OpenAudible or 
 * **Configurable:** Allows customization through command-line arguments.
 * **CLI or YAML Arguments:** Accepts either CLI flags or a yaml file with arguments.
 * **Step-Based Pipeline:** Individual pipeline steps can be run independently via `--step` for granular control and LLM orchestration.
-* **MCP Server:** An included [MCP server](abs-mcp/README.md) exposes the pipeline as tools for AI agents (Cursor, Claude Code, etc.), with support for multiple libraries and podcast management.
+* **MCP Server:** An included [MCP server](abs-mcp/README.md) exposes the pipeline as tools for AI agents (Cursor, Claude Code, etc.), with support for multiple libraries, podcast management, and server-side parsed lookup tools.
+* **MCP Tool Efficiency Metrics:** The MCP server records rough response-token usage per tool call (`ceil(bytes/4)`), with recent in-memory metrics and queryable JSONL history.
+
+## MCP Metrics Quick View
+
+If you're using the MCP server, use these tools to track token efficiency:
+
+- `get_tool_metrics(limit=10)` - recent in-memory window (last 50 max).
+- `query_tool_metrics_history(tool_name=..., since=..., until=..., limit=...)` - persisted JSONL history.
+
+Common quick checks:
+
+- **Latest cost check:** `get_tool_metrics(limit=5)` after a workflow run.
+- **Single-tool trend:** `query_tool_metrics_history(tool_name="list_abs_library", limit=100)`.
+- **Time-window audit:** `query_tool_metrics_history(since="2026-04-01T00:00:00Z", until="2026-04-01T23:59:59Z", limit=200)`.
+
+What to look at:
+
+- `rough_tokens` - estimated response token cost (`ceil(response_bytes / 4)`).
+- `response_bytes` - raw response payload size in bytes.
+- `duration_ms` - tool execution time.
+- `summary.per_tool` - aggregated count/avg/min/max token usage by tool.
+
+See [abs-mcp/README.md](abs-mcp/README.md) for complete metric fields, retention, and rotation behavior.
 
 ## Prerequisites
 

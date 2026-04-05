@@ -56,9 +56,11 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.streamable_http import EventStore
 from mcp.types import JSONRPCMessage
 
+from library_parser import LibraryDataParser
 from modules.audio_bookshelf import scan_library_for_books
 from modules.config import Config
 from modules.utils import generate_libation_json
+from tool_metrics import ToolMetricsRecorder
 from openaudible_to_ab import (
     step_scan, step_download, step_export, step_organize,
     step_scan_abs, step_match,
@@ -66,6 +68,7 @@ from openaudible_to_ab import (
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 LOGGER = logging.getLogger("audiobook-ingestion-mcp")
+PARSER = LibraryDataParser()
 
 
 class InMemoryEventStore(EventStore):
@@ -122,10 +125,15 @@ mcp = FastMCP(
         "The ingest_books tool runs all steps sequentially but can timeout on "
         "long-running operations. Prefer individual step tools for LLM orchestration.\n\n"
         "DISCOVERY & VERIFICATION TOOLS:\n"
-        "- list_library — filter by status/author/title/duration to find specific books\n"
+        "- list_library — filter Libation library by author/series/title for exact add-targeting\n"
         "- get_source_status — inspect source/destination directories (file counts, extensions)\n"
-        "- list_abs_library — verify what's currently in AudioBookShelf\n"
-        "- delete_library_items — remove items with optional cleanup_files to delete disk files\n\n"
+        "- list_abs_library — query ABS library from cache using targeted author/series/title filters\n"
+        "- search_abs_library — direct ABS text search for quick lookups\n"
+        "- delete_library_items — remove items with optional cleanup_files to delete disk files\n"
+        "- get_tool_metrics — inspect recent response bytes/tokens for MCP tool calls\n"
+        "- query_tool_metrics_history — query persisted tool metrics with time/tool filters\n\n"
+        "For low-token precision lookups, avoid broad list calls. "
+        "Always pass author/series/title/query and set limit=0 to return all matches in one response.\n\n"
         "Always specify library= to target the correct ABS instance (e.g. 'adult', 'kids')."
     ),
     event_store=InMemoryEventStore(),
@@ -138,6 +146,11 @@ def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
+METRICS = ToolMetricsRecorder(
+    history_path=_env("TOOL_METRICS_PATH", str(ABS_MCP_DIR / "data" / "tool-metrics.jsonl")),
+)
+
+
 def _r(override: str | None, env_key: str, default: str = "") -> str:
     """Resolve a value: per-call override > env var > default."""
     if override is not None:
@@ -147,6 +160,16 @@ def _r(override: str | None, env_key: str, default: str = "") -> str:
 
 def _log_buffer() -> io.StringIO:
     return io.StringIO()
+
+
+def _elapsed_ms(start_time: float) -> int:
+    """Milliseconds elapsed since start time."""
+    return int((time.monotonic() - start_time) * 1000)
+
+
+def _record_tool_result(tool_name: str, start_time: float, result: str, success: bool = True) -> str:
+    """Record response efficiency metrics and return the result unchanged."""
+    return METRICS.record(tool_name=tool_name, result=result, duration_ms=_elapsed_ms(start_time), success=success)
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +237,130 @@ def _abs_headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _normalize_limit_offset(limit: int, offset: int, default_limit: int = 25, max_limit: int = 200) -> tuple[int, int]:
+    """Normalize pagination inputs with sane bounds for MCP payload size."""
+    safe_limit = limit if limit and limit > 0 else default_limit
+    safe_limit = min(safe_limit, max_limit)
+    safe_offset = max(offset, 0)
+    return safe_limit, safe_offset
+
+
+def _sanitize_cache_key(name: str) -> str:
+    """Sanitize cache key for filesystem safety."""
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", name or "default")
+    return cleaned[:64] or "default"
+
+
+def _abs_cache_path(library_name: str, library_id: str) -> Path:
+    """Build deterministic ABS cache file path."""
+    cache_root = Path(_env("ABS_CACHE_DIR", "/tmp/abs-cache"))
+    cache_root.mkdir(parents=True, exist_ok=True)
+    key = _sanitize_cache_key(library_name or library_id or "default")
+    return cache_root / f"{key}.json"
+
+
+def _fetch_abs_library_items(url: str, library_id: str, token: str) -> list[dict]:
+    """Fetch the complete ABS library item set."""
+    resp = requests.get(
+        f"{url}/api/libraries/{library_id}/items",
+        headers=_abs_headers(token),
+        params={"limit": 0, "sort": "addedAt"},
+        timeout=45,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
+    return resp.json().get("results", [])
+
+
+def _load_or_refresh_abs_cache(
+    cache_path: Path,
+    refresh: bool,
+    max_age_seconds: int,
+    url: str,
+    library_id: str,
+    token: str,
+    library_name: str,
+) -> tuple[list[dict], dict]:
+    """Load ABS items from cache, refreshing if requested or stale."""
+    now = int(time.time())
+    cache_exists = cache_path.is_file()
+    cache_data: dict = {}
+    is_stale = True
+    if cache_exists:
+        with open(cache_path) as f:
+            cache_data = json.load(f)
+        fetched_at = int(cache_data.get("fetched_at", 0) or 0)
+        is_stale = (now - fetched_at) > max_age_seconds
+    if refresh or not cache_exists or is_stale:
+        items = _fetch_abs_library_items(url, library_id, token)
+        cache_data = {
+            "library": library_name,
+            "library_id": library_id,
+            "fetched_at": now,
+            "item_count": len(items),
+            "items": items,
+        }
+        with open(cache_path, "w") as f:
+            json.dump(cache_data, f)
+        return items, {"refreshed": True, "fetched_at": now}
+    return cache_data.get("items", []), {"refreshed": False, "fetched_at": int(cache_data.get("fetched_at", 0) or 0)}
+
+
+def _flatten_abs_item(item: dict) -> dict:
+    """Flatten ABS item into compact MCP-friendly fields."""
+    media = item.get("media", {})
+    metadata = media.get("metadata", {})
+    return {
+        "id": item.get("id", ""),
+        "title": metadata.get("title", ""),
+        "author": metadata.get("authorName", ""),
+        "series": _extract_series_names(item),
+        "duration": round(media.get("duration", 0) / 60, 1),
+        "added_at": item.get("addedAt", ""),
+        "has_audio": bool(media.get("audioFiles")),
+    }
+
+
+def _filter_abs_items(items: list[dict], query: str | None, title: str | None, author: str | None, series: str | None) -> list[dict]:
+    """Filter ABS items by broad and field-specific substring checks."""
+    result = items
+    if query:
+        q = query.lower()
+        result = [
+            item for item in result
+            if q in item.get("title", "").lower()
+            or q in item.get("author", "").lower()
+            or q in item.get("series", "").lower()
+        ]
+    if title:
+        t = title.lower()
+        result = [item for item in result if t in item.get("title", "").lower()]
+    if author:
+        a = author.lower()
+        result = [item for item in result if a in item.get("author", "").lower()]
+    if series:
+        s = series.lower()
+        result = [item for item in result if s in item.get("series", "").lower()]
+    return result
+
+
+def _sort_abs_items(items: list[dict], sort_by: str | None) -> list[dict]:
+    """Sort flattened ABS items by known fields."""
+    if not sort_by:
+        return items
+    key_map = {
+        "title": lambda i: i.get("title", "").lower(),
+        "author": lambda i: i.get("author", "").lower(),
+        "series": lambda i: i.get("series", "").lower(),
+        "duration": lambda i: i.get("duration", 0),
+        "added_at": lambda i: i.get("added_at", ""),
+    }
+    key_fn = key_map.get(sort_by)
+    if not key_fn:
+        return items
+    return sorted(items, key=key_fn)
+
+
 def _build_config(
     library: str | None = None,
     source_dir: str | None = None,
@@ -275,6 +422,7 @@ def list_libraries() -> str:
     Libraries of media_type 'book' support audiobook ingestion tools.
     Libraries of media_type 'podcast' support podcast tools.
     """
+    _tool_start = time.monotonic()
     cfg = _load_libraries()
     result = {
         "default_library": cfg["default_library"],
@@ -287,7 +435,7 @@ def list_libraries() -> str:
             for name, lib in cfg["libraries"].items()
         },
     }
-    return json.dumps(result, indent=2)
+    return _record_tool_result("list_libraries", _tool_start, json.dumps(result))
 
 
 def _filter_library_books(
@@ -335,10 +483,12 @@ def list_library(
     source_dir: str | None = None,
     status: str | None = None,
     author: str | None = None,
+    series: str | None = None,
     title: str | None = None,
     max_duration: int | None = None,
     min_duration: int | None = None,
     limit: int = 0,
+    offset: int = 0,
     sort_by: str | None = None,
 ) -> str:
     """List books in the Audible library from Libation's export with filtering.
@@ -347,12 +497,15 @@ def list_library(
         source_dir: Libation books directory (default: from .env).
         status: Filter by BookStatus (e.g. 'NotLiberated', 'Liberated').
         author: Filter by author name (case-insensitive substring match).
+        series: Filter by series name (case-insensitive substring match).
         title: Filter by title (case-insensitive substring match).
         max_duration: Only books shorter than this many minutes.
         min_duration: Only books longer than this many minutes.
-        limit: Max results to return (0 = all).
+        limit: Max results to return. With limit=0, returns all matches.
+        offset: Number of filtered results to skip (default 0).
         sort_by: Sort field: 'duration', 'title', 'author', 'date_added' (default: none).
     """
+    _tool_start = time.monotonic()
     src = _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY")
     json_path = str(Path(src) / "libation.json")
 
@@ -363,27 +516,41 @@ def list_library(
     with open(json_path) as f:
         books = json.load(f)
 
-    filtered = _filter_library_books(books, status, author, title, min_duration, max_duration)
+    filtered = PARSER.filter_libation_books(books, status, author, series, title, min_duration, max_duration)
 
     if sort_by:
-        filtered = _sort_library_books(filtered, sort_by)
+        filtered = PARSER.sort_libation_books(filtered, sort_by)
 
-    if limit > 0:
-        filtered = filtered[:limit]
+    filters_present = any([status, author, series, title, min_duration is not None, max_duration is not None])
+    paged, effective_limit, safe_offset, next_offset, paginated = PARSER.select_output_slice(
+        filtered,
+        limit,
+        offset,
+        filters_present=filters_present,
+    )
 
     summary = [
         {
             "asin": b.get("AudibleProductId", ""),
             "title": b.get("Title", ""),
+            "subtitle": b.get("Subtitle", ""),
             "author": b.get("AuthorNames", ""),
             "series": b.get("SeriesNames", ""),
             "duration_minutes": b.get("LengthInMinutes", 0),
             "status": b.get("BookStatus", ""),
             "date_added": b.get("DateAdded", ""),
         }
-        for b in filtered
+        for b in paged
     ]
-    return json.dumps({"total": len(summary), "books": summary}, indent=2)
+    return _record_tool_result("list_library", _tool_start, json.dumps({
+        "total_in_library": len(books),
+        "total_matches": len(filtered),
+        "limit": effective_limit,
+        "offset": safe_offset,
+        "next_offset": next_offset,
+        "paginated": paginated,
+        "books": summary,
+    }))
 
 
 @mcp.tool()
@@ -398,9 +565,10 @@ def scan_audible(
     Args:
         libation_cli: Path to libationcli binary (default: from .env).
     """
+    _tool_start = time.monotonic()
     cfg = _build_config(libation_cli=libation_cli)
     result = step_scan(cfg)
-    return json.dumps(result, indent=2)
+    return _record_tool_result("scan_audible", _tool_start, json.dumps(result))
 
 
 @mcp.tool()
@@ -421,6 +589,7 @@ def set_book_status(
         force: Set status even if the audio file exists on disk.
         libation_cli: Path to libationcli binary (default: from .env).
     """
+    _tool_start = time.monotonic()
     cli = libation_cli or _env("LIBATION_CLI", "libationcli")
     flag = "--not-downloaded" if status == "not-downloaded" else "--downloaded"
     cmd = [cli, "set-status", flag]
@@ -429,14 +598,14 @@ def set_book_status(
     cmd.extend(asins)
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    return json.dumps({
+    return _record_tool_result("set_book_status", _tool_start, json.dumps({
         "success": result.returncode == 0,
         "asins": asins,
         "status_set": status,
         "force": force,
         "stdout": result.stdout.strip(),
         "stderr": result.stderr.strip(),
-    }, indent=2)
+    }), success=result.returncode == 0)
 
 
 @mcp.tool()
@@ -453,9 +622,10 @@ def download_books(
         asins: Optional list of ASINs to download. If empty, downloads all new books.
         libation_cli: Path to libationcli binary (default: from .env).
     """
+    _tool_start = time.monotonic()
     cfg = _build_config(libation_cli=libation_cli, asins=asins)
     result = step_download(cfg)
-    return json.dumps(result, indent=2)
+    return _record_tool_result("download_books", _tool_start, json.dumps(result), success=not bool(result.get("error")))
 
 
 @mcp.tool()
@@ -471,9 +641,10 @@ def export_library(
         source_dir: Libation books directory (default: from .env).
         libation_cli: Path to libationcli binary (default: from .env).
     """
+    _tool_start = time.monotonic()
     cfg = _build_config(source_dir=source_dir, libation_cli=libation_cli)
     result = step_export(cfg)
-    return json.dumps(result, indent=2)
+    return _record_tool_result("export_library", _tool_start, json.dumps(result), success=not bool(result.get("error")))
 
 
 @mcp.tool()
@@ -508,6 +679,7 @@ def organize_books(
         libation_file_locations_path: Path to Libation FileLocationsV2.json (default: from .env).
         enable_profanity_cleaning: Enable monkeyplug profanity filtering (default: from .env).
     """
+    _tool_start = time.monotonic()
     user_specified_ext = audio_file_extension is not None
 
     cfg = _build_config(
@@ -531,7 +703,7 @@ def organize_books(
     result = step_organize(cfg)
     clean = {k: v for k, v in result.items() if not k.startswith("_")}
     clean["audio_file_extension"] = cfg.audio_file_extension
-    return json.dumps(clean, indent=2)
+    return _record_tool_result("organize_books", _tool_start, json.dumps(clean), success=not bool(clean.get("error")))
 
 
 def _detect_audio_extension(source_dir: Path) -> str:
@@ -571,12 +743,13 @@ def scan_audiobookshelf(
         abs_library_id: Override ABS library ID.
         abs_api_token: Override ABS API token.
     """
+    _tool_start = time.monotonic()
     cfg = _build_config(
         library=library, abs_server_url=abs_server_url,
         abs_library_id=abs_library_id, abs_api_token=abs_api_token,
     )
     result = step_scan_abs(cfg, wait=wait)
-    return json.dumps(result, indent=2)
+    return _record_tool_result("scan_audiobookshelf", _tool_start, json.dumps(result), success=not bool(result.get("error")))
 
 
 @mcp.tool()
@@ -605,6 +778,7 @@ def delete_library_items(
         abs_library_id: Override ABS library ID.
         abs_api_token: Override ABS API token.
     """
+    _tool_start = time.monotonic()
     lib = _resolve_library(library)
     url = abs_server_url or lib["abs_server_url"]
     lib_id = abs_library_id or lib["library_id"]
@@ -648,7 +822,7 @@ def delete_library_items(
     output: dict = {"deleted": len(results), "results": results}
     if cleanup_files:
         output["files_cleaned"] = files_cleaned
-    return json.dumps(output, indent=2)
+    return _record_tool_result("delete_library_items", _tool_start, json.dumps(output))
 
 
 def _cleanup_item_files(
@@ -750,13 +924,14 @@ def match_audiobookshelf(
         abs_library_id: Override ABS library ID.
         abs_api_token: Override ABS API token.
     """
+    _tool_start = time.monotonic()
     cfg = _build_config(
         library=library, abs_server_url=abs_server_url,
         abs_library_id=abs_library_id, abs_api_token=abs_api_token,
         purchased_how_long_ago=days_ago,
     )
     result = step_match(cfg, book_list=book_list)
-    return json.dumps(result, indent=2)
+    return _record_tool_result("match_audiobookshelf", _tool_start, json.dumps(result), success=not bool(result.get("error")))
 
 
 @mcp.tool()
@@ -799,6 +974,7 @@ def ingest_books(
         abs_library_id: ABS library UUID (default: from .env or library config).
         abs_api_token: ABS API bearer token (default: from .env or library config).
     """
+    _tool_start = time.monotonic()
     cfg = _build_config(
         library=library, source_dir=source_dir, destination_dir=destination_dir,
         audio_file_extension=audio_file_extension, copy_instead_of_move=copy_instead_of_move,
@@ -835,7 +1011,7 @@ def ingest_books(
         results["scan_abs"] = "skipped (no new books)"
         results["match"] = "skipped (no new books)"
 
-    return json.dumps(results, indent=2)
+    return _record_tool_result("ingest_books", _tool_start, json.dumps(results))
 
 
 @mcp.tool()
@@ -857,6 +1033,7 @@ def get_status(
         abs_library_id: ABS library UUID (default: from .env or library config).
         abs_api_token: ABS API bearer token (default: from .env or library config).
     """
+    _tool_start = time.monotonic()
     lib = _resolve_library(library)
     src = _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY", "(not set)")
     dest = destination_dir or lib["destination_dir"] or "(not set)"
@@ -882,56 +1059,151 @@ def get_status(
     else:
         status["abs_status"] = "not configured"
 
-    return json.dumps(status, indent=2)
+    return _record_tool_result("get_status", _tool_start, json.dumps(status))
 
 
 @mcp.tool()
 def list_abs_library(
     library: str | None = None,
+    query: str | None = None,
+    title: str | None = None,
+    author: str | None = None,
+    series: str | None = None,
+    limit: int = 0,
+    offset: int = 0,
+    sort_by: str | None = None,
+    refresh: bool = False,
+    cache_max_age_seconds: int = 3600,
     abs_server_url: str | None = None,
     abs_library_id: str | None = None,
     abs_api_token: str | None = None,
 ) -> str:
-    """List all items currently in an AudioBookShelf library.
+    """List items in an AudioBookShelf library with low-token pagination.
 
-    Use after scan_audiobookshelf or match_audiobookshelf to verify
-    books are present with correct metadata.
+    Server-side cache stores full ABS response and this tool only returns
+    compact, filtered slices.
 
     Args:
         library: Library name from libraries.yaml (e.g. 'kids', 'adult').
+        query: Substring search across title/author/series.
+        title: Title substring filter.
+        author: Author substring filter.
+        series: Series substring filter.
+        limit: Max results to return. With limit=0, returns all matches.
+        offset: Number of results to skip from filtered set.
+        sort_by: Sort field: 'title', 'author', 'series', 'duration', 'added_at'.
+        refresh: Force refresh cache from ABS API before query.
+        cache_max_age_seconds: Auto-refresh cache if older than this many seconds.
         abs_server_url: Override ABS server URL.
         abs_library_id: Override ABS library ID.
         abs_api_token: Override ABS API token.
     """
+    _tool_start = time.monotonic()
     lib = _resolve_library(library)
     url = abs_server_url or lib["abs_server_url"]
     lib_id = abs_library_id or lib["library_id"]
     token = abs_api_token or lib["abs_api_token"]
-    headers = _abs_headers(token)
+    cache_path = _abs_cache_path(lib["name"], lib_id)
+    try:
+        raw_items, cache_meta = _load_or_refresh_abs_cache(
+            cache_path=cache_path,
+            refresh=refresh,
+            max_age_seconds=max(cache_max_age_seconds, 60),
+            url=url,
+            library_id=lib_id,
+            token=token,
+            library_name=lib["name"],
+        )
+    except Exception as e:
+        return _record_tool_result(
+            "list_abs_library",
+            _tool_start,
+            json.dumps({"error": "cache_refresh_failed", "detail": str(e)}),
+            success=False,
+        )
 
+    flattened = [_flatten_abs_item(item) for item in raw_items]
+    filtered = PARSER.filter_abs_items(flattened, query, title, author, series)
+    sorted_items = PARSER.sort_abs_items(filtered, sort_by)
+    filters_present = any([query, title, author, series])
+    paged, effective_limit, safe_offset, next_offset, paginated = PARSER.select_output_slice(
+        sorted_items,
+        limit,
+        offset,
+        filters_present=filters_present,
+    )
+    return _record_tool_result("list_abs_library", _tool_start, json.dumps({
+        "library": lib["name"] or "(default)",
+        "cache": {
+            "path": str(cache_path),
+            "refreshed": cache_meta["refreshed"],
+            "fetched_at": cache_meta["fetched_at"],
+        },
+        "total_in_library": len(flattened),
+        "total_matches": len(sorted_items),
+        "limit": effective_limit,
+        "offset": safe_offset,
+        "next_offset": next_offset,
+        "paginated": paginated,
+        "items": paged,
+    }))
+
+
+@mcp.tool()
+def search_abs_library(
+    query: str,
+    library: str | None = None,
+    limit: int = 0,
+    offset: int = 0,
+    abs_server_url: str | None = None,
+    abs_library_id: str | None = None,
+    abs_api_token: str | None = None,
+) -> str:
+    """Search an ABS library directly via /search endpoint with compact output."""
+    _tool_start = time.monotonic()
+    lib = _resolve_library(library)
+    url = abs_server_url or lib["abs_server_url"]
+    lib_id = abs_library_id or lib["library_id"]
+    token = abs_api_token or lib["abs_api_token"]
     resp = requests.get(
-        f"{url}/api/libraries/{lib_id}/items",
-        headers=headers,
-        params={"limit": 0, "sort": "addedAt"},
+        f"{url}/api/libraries/{lib_id}/search",
+        headers=_abs_headers(token),
+        params={"q": query, "limit": 0},
         timeout=30,
     )
     if not resp.ok:
-        return json.dumps({"error": f"HTTP {resp.status_code}", "body": resp.text})
+        return _record_tool_result(
+            "search_abs_library",
+            _tool_start,
+            json.dumps({"error": f"HTTP {resp.status_code}", "body": resp.text}),
+            success=False,
+        )
 
-    items = resp.json().get("results", [])
-    summary = [
-        {
-            "id": item["id"],
-            "title": item.get("media", {}).get("metadata", {}).get("title", ""),
-            "author": item.get("media", {}).get("metadata", {}).get("authorName", ""),
-            "series": _extract_series_names(item),
-            "duration": round(item.get("media", {}).get("duration", 0) / 60, 1),
-            "added_at": item.get("addedAt", ""),
-            "has_audio": bool(item.get("media", {}).get("audioFiles")),
-        }
-        for item in items
-    ]
-    return json.dumps({"total": len(summary), "items": summary}, indent=2)
+    payload = resp.json()
+    if isinstance(payload, dict):
+        raw_results = payload.get("book", []) or payload.get("results", []) or payload.get("items", [])
+    elif isinstance(payload, list):
+        raw_results = payload
+    else:
+        raw_results = []
+
+    flattened = [_flatten_abs_item(item) for item in raw_results if isinstance(item, dict)]
+    paged, effective_limit, safe_offset, next_offset, paginated = PARSER.select_output_slice(
+        flattened,
+        limit,
+        offset,
+        filters_present=True,
+    )
+    return _record_tool_result("search_abs_library", _tool_start, json.dumps({
+        "library": lib["name"] or "(default)",
+        "query": query,
+        "total_matches": len(flattened),
+        "limit": effective_limit,
+        "offset": safe_offset,
+        "next_offset": next_offset,
+        "paginated": paginated,
+        "items": paged,
+    }))
 
 
 def _extract_series_names(item: dict) -> str:
@@ -947,6 +1219,7 @@ def get_source_status(
     source_dir: str | None = None,
     destination_dir: str | None = None,
     library: str | None = None,
+    detail: bool = False,
 ) -> str:
     """Inspect the Libation source and ABS destination directories.
 
@@ -958,19 +1231,68 @@ def get_source_status(
         source_dir: Libation books directory (default: from .env).
         destination_dir: ABS audiobooks directory (default: from library config).
         library: Library name to resolve destination_dir.
+        detail: Include per-folder file lists for destination when true.
     """
+    _tool_start = time.monotonic()
     lib = _resolve_library(library)
     src = _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY")
     dest = destination_dir or lib["destination_dir"]
 
     result: dict = {}
-    result["source"] = _scan_directory(src, "source")
+    result["source"] = _scan_directory(src, "source", include_folders=True)
     if dest:
-        result["destination"] = _scan_directory(dest, "destination")
-    return json.dumps(result, indent=2)
+        result["destination"] = _scan_directory(dest, "destination", include_folders=detail)
+        result["destination"]["detail"] = detail
+    return _record_tool_result("get_source_status", _tool_start, json.dumps(result))
 
 
-def _scan_directory(dir_path: str, label: str) -> dict:
+def _summarize_metric_records(records: list[dict]) -> dict:
+    """Build per-tool aggregate summary for a metrics record list."""
+    return ToolMetricsRecorder._aggregate(records)
+
+
+@mcp.tool()
+def get_tool_metrics(limit: int = 10) -> str:
+    """Return recent in-memory response efficiency metrics."""
+    safe_limit = max(min(limit, 50), 1)
+    records = METRICS.get_recent(safe_limit)
+    return json.dumps({
+        "limit": safe_limit,
+        "records": records,
+        "summary": _summarize_metric_records(records),
+    })
+
+
+@mcp.tool()
+def query_tool_metrics_history(
+    tool_name: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> str:
+    """Query persisted JSONL response efficiency metrics with filters."""
+    records, summary = METRICS.query_history(
+        tool_name=tool_name,
+        since=since,
+        until=until,
+        limit=limit,
+        offset=offset,
+    )
+    return json.dumps({
+        "filters": {
+            "tool_name": tool_name,
+            "since": since,
+            "until": until,
+            "limit": max(min(limit, 500), 1),
+            "offset": max(offset, 0),
+        },
+        "records": records,
+        "summary": summary,
+    })
+
+
+def _scan_directory(dir_path: str, label: str, include_folders: bool = True) -> dict:
     """Scan a directory for audio book folders, files, and extensions."""
     base = Path(dir_path)
     info: dict = {"path": dir_path, "exists": base.is_dir()}
@@ -978,20 +1300,28 @@ def _scan_directory(dir_path: str, label: str) -> dict:
         return info
 
     audio_exts = {".m4b", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wma", ".aac"}
-    folders = []
     ext_counts: dict[str, int] = {}
     total_size = 0
+    folders: list[dict] = []
 
-    for child in sorted(base.iterdir()):
-        if child.is_dir():
-            folder_info = _scan_book_folder(child, audio_exts, ext_counts)
-            total_size += folder_info.get("size", 0)
-            folders.append(folder_info)
+    if include_folders:
+        for child in sorted(base.iterdir()):
+            if child.is_dir():
+                folder_info = _scan_book_folder(child, audio_exts, ext_counts)
+                total_size += folder_info.get("size", 0)
+                folders.append(folder_info)
+    else:
+        for file_path in base.rglob("*"):
+            if file_path.is_file() and file_path.suffix.lower() in audio_exts:
+                total_size += file_path.stat().st_size
+                ext = file_path.suffix.lower()
+                ext_counts[ext] = ext_counts.get(ext, 0) + 1
 
-    info["folder_count"] = len(folders)
+    info["folder_count"] = len([child for child in base.iterdir() if child.is_dir()])
     info["extensions"] = ext_counts
     info["total_audio_size_mb"] = round(total_size / (1024 * 1024), 1)
-    info["folders"] = folders
+    if include_folders:
+        info["folders"] = folders
     return info
 
 
@@ -1035,6 +1365,7 @@ def search_podcasts(
         abs_server_url: Override ABS server URL.
         abs_api_token: Override ABS API token.
     """
+    _tool_start = time.monotonic()
     lib = _resolve_library(None)
     url = abs_server_url or lib["abs_server_url"]
     token = abs_api_token or lib["abs_api_token"]
@@ -1046,7 +1377,12 @@ def search_podcasts(
         timeout=15,
     )
     if not resp.ok:
-        return json.dumps({"error": f"HTTP {resp.status_code}", "body": resp.text})
+        return _record_tool_result(
+            "search_podcasts",
+            _tool_start,
+            json.dumps({"error": f"HTTP {resp.status_code}", "body": resp.text}),
+            success=False,
+        )
 
     podcasts = resp.json()
     summary = [
@@ -1061,7 +1397,7 @@ def search_podcasts(
         }
         for p in podcasts
     ]
-    return json.dumps(summary, indent=2)
+    return _record_tool_result("search_podcasts", _tool_start, json.dumps(summary))
 
 
 @mcp.tool()
@@ -1083,6 +1419,7 @@ def add_podcast(
         abs_server_url: Override ABS server URL.
         abs_api_token: Override ABS API token.
     """
+    _tool_start = time.monotonic()
     lib = _resolve_library(library)
     url = abs_server_url or lib["abs_server_url"]
     token = abs_api_token or lib["abs_api_token"]
@@ -1137,12 +1474,17 @@ def add_podcast(
     )
     if resp.ok:
         data = resp.json()
-        return json.dumps({
+        return _record_tool_result("add_podcast", _tool_start, json.dumps({
             "success": True,
             "id": data.get("id"),
             "title": data.get("media", {}).get("metadata", {}).get("title"),
-        }, indent=2)
-    return json.dumps({"success": False, "status": resp.status_code, "body": resp.text})
+        }), success=True)
+    return _record_tool_result(
+        "add_podcast",
+        _tool_start,
+        json.dumps({"success": False, "status": resp.status_code, "body": resp.text}),
+        success=False,
+    )
 
 
 @mcp.tool()
@@ -1158,6 +1500,7 @@ def list_podcasts(
         abs_server_url: Override ABS server URL.
         abs_api_token: Override ABS API token.
     """
+    _tool_start = time.monotonic()
     lib = _resolve_library(library)
     url = abs_server_url or lib["abs_server_url"]
     token = abs_api_token or lib["abs_api_token"]
@@ -1169,7 +1512,12 @@ def list_podcasts(
         timeout=15,
     )
     if not resp.ok:
-        return json.dumps({"error": f"HTTP {resp.status_code}"})
+        return _record_tool_result(
+            "list_podcasts",
+            _tool_start,
+            json.dumps({"error": f"HTTP {resp.status_code}"}),
+            success=False,
+        )
 
     items = resp.json().get("results", [])
     summary = [
@@ -1181,7 +1529,7 @@ def list_podcasts(
         }
         for item in items
     ]
-    return json.dumps(summary, indent=2)
+    return _record_tool_result("list_podcasts", _tool_start, json.dumps(summary))
 
 
 @mcp.tool()
@@ -1197,6 +1545,7 @@ def get_podcast_episodes(
         abs_server_url: Override ABS server URL.
         abs_api_token: Override ABS API token.
     """
+    _tool_start = time.monotonic()
     lib = _resolve_library(None)
     url = abs_server_url or lib["abs_server_url"]
     token = abs_api_token or lib["abs_api_token"]
@@ -1207,7 +1556,12 @@ def get_podcast_episodes(
         timeout=15,
     )
     if not resp.ok:
-        return json.dumps({"error": f"HTTP {resp.status_code}"})
+        return _record_tool_result(
+            "get_podcast_episodes",
+            _tool_start,
+            json.dumps({"error": f"HTTP {resp.status_code}"}),
+            success=False,
+        )
 
     data = resp.json()
     episodes = data.get("media", {}).get("episodes", [])
@@ -1221,11 +1575,11 @@ def get_podcast_episodes(
         }
         for ep in episodes[:50]
     ]
-    return json.dumps({
+    return _record_tool_result("get_podcast_episodes", _tool_start, json.dumps({
         "podcast_title": data.get("media", {}).get("metadata", {}).get("title", ""),
         "total_episodes": len(episodes),
         "episodes": summary,
-    }, indent=2)
+    }))
 
 
 @mcp.tool()
@@ -1245,6 +1599,7 @@ def download_podcast_episodes(
         abs_server_url: Override ABS server URL.
         abs_api_token: Override ABS API token.
     """
+    _tool_start = time.monotonic()
     lib = _resolve_library(None)
     url = abs_server_url or lib["abs_server_url"]
     token = abs_api_token or lib["abs_api_token"]
@@ -1256,17 +1611,22 @@ def download_podcast_episodes(
         timeout=60,
     )
     if not resp.ok:
-        return json.dumps({"error": f"HTTP {resp.status_code}", "body": resp.text})
+        return _record_tool_result(
+            "download_podcast_episodes",
+            _tool_start,
+            json.dumps({"error": f"HTTP {resp.status_code}", "body": resp.text}),
+            success=False,
+        )
 
     data = resp.json()
     episodes = data.get("episodes", [])
-    return json.dumps({
+    return _record_tool_result("download_podcast_episodes", _tool_start, json.dumps({
         "new_episodes_found": len(episodes),
         "episodes": [
             {"title": ep.get("title", ""), "published": ep.get("pubDate", "")}
             for ep in episodes
         ],
-    }, indent=2)
+    }))
 
 
 # ---------------------------------------------------------------------------
@@ -1317,6 +1677,7 @@ def fetch_podcast_feed(
         feed_url: Direct RSS feed URL.
         max_episodes: Maximum number of episodes to return (default 20).
     """
+    _tool_start = time.monotonic()
     resolved_feed = feed_url
 
     if not resolved_feed and apple_url:
@@ -1324,7 +1685,12 @@ def fetch_podcast_feed(
         if pid:
             resolved_feed = _itunes_feed_url(pid)
         if not resolved_feed:
-            return json.dumps({"error": f"Could not extract feed URL from {apple_url}"})
+            return _record_tool_result(
+                "fetch_podcast_feed",
+                _tool_start,
+                json.dumps({"error": f"Could not extract feed URL from {apple_url}"}),
+                success=False,
+            )
 
     if not resolved_feed and search_term:
         resp = requests.get(
@@ -1337,14 +1703,29 @@ def fetch_podcast_feed(
             if results:
                 resolved_feed = results[0].get("feedUrl")
         if not resolved_feed:
-            return json.dumps({"error": f"No podcast feed found for '{search_term}'"})
+            return _record_tool_result(
+                "fetch_podcast_feed",
+                _tool_start,
+                json.dumps({"error": f"No podcast feed found for '{search_term}'"}),
+                success=False,
+            )
 
     if not resolved_feed:
-        return json.dumps({"error": "Provide search_term, apple_url, or feed_url"})
+        return _record_tool_result(
+            "fetch_podcast_feed",
+            _tool_start,
+            json.dumps({"error": "Provide search_term, apple_url, or feed_url"}),
+            success=False,
+        )
 
     parsed = feedparser.parse(resolved_feed)
     if parsed.bozo and not parsed.entries:
-        return json.dumps({"error": f"Failed to parse feed: {parsed.bozo_exception}"})
+        return _record_tool_result(
+            "fetch_podcast_feed",
+            _tool_start,
+            json.dumps({"error": f"Failed to parse feed: {parsed.bozo_exception}"}),
+            success=False,
+        )
 
     episodes = []
     for entry in parsed.entries[:max_episodes]:
@@ -1358,12 +1739,12 @@ def fetch_podcast_feed(
             "size_bytes": enc.get("length", ""),
         })
 
-    return json.dumps({
+    return _record_tool_result("fetch_podcast_feed", _tool_start, json.dumps({
         "feed_url": resolved_feed,
         "podcast_title": parsed.feed.get("title", ""),
         "total_episodes_in_feed": len(parsed.entries),
         "episodes": episodes,
-    }, indent=2)
+    }))
 
 
 def _sanitize_filename(name: str) -> str:
@@ -1397,10 +1778,16 @@ def download_podcast_files(
         abs_server_url: Override ABS server URL.
         abs_api_token: Override ABS API token.
     """
+    _tool_start = time.monotonic()
     lib = _resolve_library(library)
     dest_base = lib["destination_dir"]
     if not dest_base:
-        return json.dumps({"error": "No destination_dir configured for this library"})
+        return _record_tool_result(
+            "download_podcast_files",
+            _tool_start,
+            json.dumps({"error": "No destination_dir configured for this library"}),
+            success=False,
+        )
 
     safe_podcast = _sanitize_filename(podcast_name)
     podcast_dir = Path(dest_base) / safe_podcast
@@ -1454,13 +1841,13 @@ def download_podcast_files(
             scan_resp = scan_library_for_books(url, lib_id, token)
             scan_result = {"success": scan_resp.ok, "status_code": scan_resp.status_code}
 
-    return json.dumps({
+    return _record_tool_result("download_podcast_files", _tool_start, json.dumps({
         "downloaded": len(downloaded),
         "errors": len(errors),
         "files": downloaded,
         "error_details": errors,
         "scan_result": scan_result,
-    }, indent=2)
+    }), success=len(errors) == 0)
 
 
 if __name__ == "__main__":

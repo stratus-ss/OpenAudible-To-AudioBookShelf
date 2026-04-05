@@ -330,11 +330,14 @@ The pipeline has six discrete steps. Each step has a dedicated MCP tool and can 
 
 Additional discovery and management tools:
 
-- **list_library** -- browse/filter the Audible library (by status, author, title, duration)
-- **list_abs_library** -- verify what's currently in AudioBookShelf
-- **get_source_status** -- inspect source/destination directories (file counts, extensions, sizes)
+- **list_library** -- parse full Libation export and return full filtered matches by default
+- **list_abs_library** -- parse full cached AudioBookShelf JSON and return full filtered matches by default
+- **search_abs_library** -- quick direct ABS text search for ad-hoc lookups
+- **get_source_status** -- inspect source/destination directories (summary by default, optional detail)
 - **set_book_status** -- mark books as unliberated to force re-download
 - **delete_library_items** -- remove ABS items with optional disk file cleanup
+- **get_tool_metrics** -- recent response-byte and rough-token metrics (last 50 in-memory)
+- **query_tool_metrics_history** -- persisted JSONL metrics query with tool/time filters
 
 ### Environment Variables
 
@@ -384,6 +387,7 @@ Additional discovery and management tools:
 | `MCP_TRANSPORT` | Transport protocol (`streamable-http`, `sse`, or `stdio`) | `streamable-http` |
 | `MCP_HOST` | Listen address | `0.0.0.0` |
 | `MCP_PORT` | Listen port | `8765` |
+| `TOOL_METRICS_PATH` | JSONL file path for persisted tool metrics | `abs-mcp/data/tool-metrics.jsonl` |
 
 ### Available Tools
 
@@ -410,39 +414,85 @@ Pipeline status and ABS connectivity check. Returns source/destination paths, AB
 
 ##### list_library
 
-List books in the Audible library from Libation's JSON export with optional filtering. Returns ASIN, title, author, series, duration, status, and date added.
+List books in the Audible library from Libation's JSON export with optional filtering and parser-based matching. Returns ASIN, title, subtitle, author, series, duration, status, and date added.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `source_dir` | str | Libation books directory |
 | `status` | str | Filter by BookStatus (e.g. `NotLiberated`, `Liberated`) |
 | `author` | str | Filter by author name (case-insensitive substring) |
+| `series` | str | Filter by series name (case-insensitive substring) |
 | `title` | str | Filter by title (case-insensitive substring) |
 | `max_duration` | int | Only books shorter than this many minutes |
 | `min_duration` | int | Only books longer than this many minutes |
-| `limit` | int | Max results to return (0 = all) |
+| `limit` | int | Max results to return (`0` = all matches) |
+| `offset` | int | Number of filtered results to skip (default 0) |
 | `sort_by` | str | Sort field: `duration`, `title`, `author`, `date_added` |
 
 ##### list_abs_library
 
-List all items currently in an AudioBookShelf library. Returns item ID, title, author, series, duration, and whether audio is present. Use after ingestion to verify books landed correctly.
+List items in an AudioBookShelf library using server-side cache and parser logic. The tool fetches/parses the full dataset server-side, then returns results from that parsed dataset. Use `limit=0` to return all matches in one call.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `library` | str | Library name from libraries.yaml |
+| `query` | str | Substring search across title/author/series |
+| `title` | str | Title substring filter |
+| `author` | str | Author substring filter |
+| `series` | str | Series substring filter |
+| `limit` | int | Max results to return (`0` = all matches) |
+| `offset` | int | Number of filtered results to skip (default 0) |
+| `sort_by` | str | Sort field: `title`, `author`, `series`, `duration`, `added_at` |
+| `refresh` | bool | Force cache refresh from ABS API |
+| `cache_max_age_seconds` | int | Auto-refresh cache age threshold (default 3600) |
+| `abs_server_url` | str | ABS server URL |
+| `abs_library_id` | str | ABS library UUID |
+| `abs_api_token` | str | ABS API bearer token |
+
+##### search_abs_library
+
+Search an ABS library directly via `/api/libraries/{id}/search` and return compact parsed results.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `query` | str | **(required)** Search text |
+| `library` | str | Library name from libraries.yaml |
+| `limit` | int | Max results to return (`0` = all matches) |
+| `offset` | int | Number of results to skip (default 0) |
 | `abs_server_url` | str | ABS server URL |
 | `abs_library_id` | str | ABS library UUID |
 | `abs_api_token` | str | ABS API bearer token |
 
 ##### get_source_status
 
-Inspect the Libation source and ABS destination directories. Shows folder names, audio file counts, file extensions present, and sizes. Use after downloading to verify files arrived and detect extension mismatches (e.g. `.mp3` vs `.m4b`).
+Inspect the Libation source and ABS destination directories. Returns compact summaries by default to avoid large payloads. Set `detail=true` only when you need per-folder destination details.
 
 | Parameter | Type | Description |
 |---|---|---|
 | `source_dir` | str | Libation books directory |
 | `destination_dir` | str | ABS audiobooks directory |
 | `library` | str | Library name to resolve destination_dir |
+| `detail` | bool | Include per-folder destination details (default false) |
+
+##### get_tool_metrics
+
+Return the recent in-memory response efficiency window for tool calls. Tracks response payload only.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `limit` | int | Number of recent records to return (default 10, max 50) |
+
+##### query_tool_metrics_history
+
+Query persisted JSONL metrics history with optional tool name and timestamp filters.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `tool_name` | str | Filter to a specific tool name |
+| `since` | str | ISO lower bound timestamp |
+| `until` | str | ISO upper bound timestamp |
+| `limit` | int | Max records to return (default 50, max 500) |
+| `offset` | int | Number of matching records to skip |
 
 #### Ingestion Pipeline
 
@@ -656,7 +706,8 @@ export_library()                                              # refresh libation
 organize_books(library="kids", purchased_how_long_ago=0)      # auto-detects .m4b or .mp3
 scan_audiobookshelf(library="kids")                           # trigger ABS scan
 match_audiobookshelf(library="kids")                          # match to Audible metadata
-list_abs_library(library="kids")                              # verify books in ABS
+list_abs_library(library="kids", author="Estrella")           # compact filtered view
+search_abs_library(query="Ten Big Ones", library="kids")      # direct ABS lookup
 ```
 
 **Force re-download a book:**
@@ -702,6 +753,13 @@ delete_library_items(delete_all=true, cleanup_files=true, library="kids")
 get_source_status(library="kids")  # verify clean
 ```
 
+**Inspect token efficiency of recent calls:**
+
+```
+get_tool_metrics(limit=20)
+query_tool_metrics_history(tool_name="list_library", since="2026-04-01T00:00:00Z", limit=100)
+```
+
 ### Known Behaviors
 
 - **Audio format auto-detection:** The default audio format is `.m4b`. Some Audible content (e.g. short episodes, podcasts) downloads as `.mp3`. The `organize_books` tool auto-detects the actual extension in the source directory when `.m4b` files aren't found, so you don't need to manually specify it. The detected extension is returned in the response. Use `get_source_status` to inspect file types before organizing.
@@ -710,3 +768,7 @@ get_source_status(library="kids")  # verify clean
 - **ABS item persistence:** Deleting files from disk and rescanning does **not** remove items from the ABS database. Use `delete_library_items` with `cleanup_files=true` for full cleanup (removes ABS entries, destination files, and source files).
 - **Re-downloading books:** Libation tracks which books have been downloaded. To force a re-download, use `set_book_status(asins=[...], status="not-downloaded")` before calling `download_books`.
 - **Libation chapter splitting:** If Libation is configured with `SplitFilesByChapter: true`, it produces many small `.m4b` files per book instead of one. The pipeline expects single-file output. Ensure `SplitFilesByChapter` is `false` in Libation's `Settings.json`.
+- **Parser-first lookup behavior:** `list_library`, `list_abs_library`, and `search_abs_library` parse full datasets server-side. With `limit=0`, they return all matches in one call (no page-walking).
+- **Compact JSON responses:** Tool responses are emitted as compact JSON (no pretty-print indentation) to reduce token usage.
+- **Rough token estimate formula:** Metrics use `ceil(response_bytes / 4)` as a lightweight approximation for JSON/English payload token usage.
+- **Metrics retention:** Recent metrics keep only the last 50 calls in memory; persisted JSONL auto-rotates when it grows past 2000 lines (keeps most recent 1000).
