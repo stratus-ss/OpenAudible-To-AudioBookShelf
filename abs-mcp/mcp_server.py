@@ -273,6 +273,50 @@ def _fetch_abs_library_items(url: str, library_id: str, token: str) -> list[dict
     return resp.json().get("results", [])
 
 
+def _fetch_abs_series_map(url: str, library_id: str, token: str) -> dict[str, str]:
+    """Build a book_id -> series names mapping from the ABS series endpoint.
+
+    The /items endpoint returns minified data without series metadata.
+    This fetches the /series endpoint and builds a lookup so we can
+    inject series into each item before caching.
+    """
+    resp = requests.get(
+        f"{url}/api/libraries/{library_id}/series",
+        headers=_abs_headers(token),
+        params={"limit": 500},
+        timeout=30,
+    )
+    if not resp.ok:
+        LOGGER.warning("Failed to fetch series data: HTTP %s", resp.status_code)
+        return {}
+    series_map: dict[str, str] = {}
+    for s in resp.json().get("results", []):
+        name = s.get("name", "")
+        if not name:
+            continue
+        for book in s.get("books", []):
+            bid = book.get("id", "")
+            if bid:
+                existing = series_map.get(bid, "")
+                series_map[bid] = f"{existing}, {name}" if existing else name
+    LOGGER.info("Series map: %d books across %d series",
+                len(series_map), len(resp.json().get("results", [])))
+    return series_map
+
+
+def _enrich_items_with_series(items: list[dict], series_map: dict[str, str]) -> None:
+    """Inject series metadata into minified ABS items in-place."""
+    if not series_map:
+        return
+    for item in items:
+        bid = item.get("id", "")
+        if bid in series_map:
+            metadata = item.setdefault("media", {}).setdefault("metadata", {})
+            if not metadata.get("series"):
+                names = series_map[bid]
+                metadata["series"] = [{"name": n.strip()} for n in names.split(", ")]
+
+
 def _load_or_refresh_abs_cache(
     cache_path: Path,
     refresh: bool,
@@ -292,13 +336,19 @@ def _load_or_refresh_abs_cache(
             cache_data = json.load(f)
         fetched_at = int(cache_data.get("fetched_at", 0) or 0)
         is_stale = (now - fetched_at) > max_age_seconds
+        if not is_stale and not cache_data.get("series_enriched"):
+            LOGGER.info("Cache missing series enrichment, forcing refresh")
+            is_stale = True
     if refresh or not cache_exists or is_stale:
         items = _fetch_abs_library_items(url, library_id, token)
+        series_map = _fetch_abs_series_map(url, library_id, token)
+        _enrich_items_with_series(items, series_map)
         cache_data = {
             "library": library_name,
             "library_id": library_id,
             "fetched_at": now,
             "item_count": len(items),
+            "series_enriched": True,
             "items": items,
         }
         with open(cache_path, "w") as f:
