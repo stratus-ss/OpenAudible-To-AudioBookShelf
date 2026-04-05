@@ -139,6 +139,7 @@ mcp = FastMCP(
     event_store=InMemoryEventStore(),
     host=os.environ.get("MCP_HOST", "0.0.0.0"),
     port=int(os.environ.get("MCP_PORT", "8765")),
+    streamable_http_path=os.environ.get("MCP_STREAMABLE_PATH", "/mcp"),
 )
 
 
@@ -1852,5 +1853,9 @@ def download_podcast_files(
 
 if __name__ == "__main__":
     transport = _env("MCP_TRANSPORT", "streamable-http")
-    LOGGER.info("Starting Audiobook Ingestion MCP (%s)", transport)
+    LOGGER.info(
+        "Starting Audiobook Ingestion MCP (%s, path=%s)",
+        transport,
+        mcp.settings.streamable_http_path,
+    )
     mcp.run(transport=transport)

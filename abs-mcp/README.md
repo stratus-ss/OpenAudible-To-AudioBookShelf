@@ -4,7 +4,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 
 Supports **multiple libraries** (e.g. kids books, adult books, podcasts) via a YAML registry, and includes **podcast tools** for searching, subscribing, and downloading podcast episodes -- including a manual download fallback for podcasts without public RSS feeds.
 
-Supports Streamable HTTP (default), SSE, and stdio transports for remote and local use with Cursor, Claude Code, and other MCP clients.
+Supports Streamable HTTP (default at `/mcp`, configurable via `MCP_STREAMABLE_PATH`), SSE, and stdio transports for remote and local use with Cursor, Claude Code, Moltis, and other MCP clients.
 
 ---
 
@@ -141,7 +141,7 @@ Tools then accept a `library` parameter (e.g. `library="kids"`) instead of raw U
 
 ### Step 6: Start the Server
 
-**SSE mode (remote/network access -- default):**
+**Streamable HTTP mode (remote/network access -- default):**
 
 ```bash
 cd /path/to/Import-To-AudioBookShelf
@@ -223,19 +223,21 @@ Add to `~/.claude/settings.json` (or project `.mcp.json`):
 }
 ```
 
-#### Moltis (SSE)
+#### Moltis (Streamable HTTP)
 
 Add to your Moltis config (see `moltis-mcp-config.toml`):
 
 ```toml
 [mcp.servers.audiobook_ingestion]
-transport = "sse"
+transport = "streamable-http"
 url = "http://your-abs-host:8765/sse"
 ```
 
+> **Note:** The URL path is `/sse` when the server is configured with `MCP_STREAMABLE_PATH=/sse` for broad client compatibility. If your Moltis version only recognizes `transport = "sse"`, use that instead -- Moltis 0.1.x sends Streamable HTTP requests under the `"sse"` transport label.
+
 #### systemd (persistent service)
 
-The included `audiobook-ingestion-mcp.service` starts the MCP server in SSE mode on boot. It waits for networking and the NFS mount before starting, and restarts automatically on failure.
+The included `audiobook-ingestion-mcp.service` starts the MCP server in Streamable HTTP mode on boot. It waits for networking and the NFS mount before starting, and restarts automatically on failure.
 
 The service file ships with paths for the `open-audible` host. If your paths differ, edit the `WorkingDirectory`, `Environment`, and `ExecStart` lines before installing.
 
@@ -252,7 +254,7 @@ sudo systemctl status audiobook-ingestion-mcp
 journalctl -u audiobook-ingestion-mcp -f
 ```
 
-> **Note:** The MCP server must run on the host where `libationcli` is installed and the ABS audiobooks directory is writable (directly or via NFS). For remote setups, start the server on that host in SSE mode and connect from your AI client via URL.
+> **Note:** The MCP server must run on the host where `libationcli` is installed and the ABS audiobooks directory is writable (directly or via NFS). For remote setups, start the server on that host in Streamable HTTP mode and connect from your AI client via URL.
 
 ### Testing
 
@@ -387,6 +389,7 @@ Additional discovery and management tools:
 | `MCP_TRANSPORT` | Transport protocol (`streamable-http`, `sse`, or `stdio`) | `streamable-http` |
 | `MCP_HOST` | Listen address | `0.0.0.0` |
 | `MCP_PORT` | Listen port | `8765` |
+| `MCP_STREAMABLE_PATH` | URL path for the Streamable HTTP endpoint | `/mcp` |
 | `TOOL_METRICS_PATH` | JSONL file path for persisted tool metrics | `abs-mcp/data/tool-metrics.jsonl` |
 
 ### Available Tools
