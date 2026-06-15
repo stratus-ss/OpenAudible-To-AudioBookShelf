@@ -8,12 +8,22 @@ import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 
-from modules.audio_bookshelf import (get_all_books, get_audio_bookshelf_recent_books, process_audio_books,
-                                     scan_library_for_books)
-from modules.audio_cleaner import AudioCleaner
-from modules.config import Config
-from modules.utils import (_parse_date, find_existing_series_folder, generate_libation_json,
-                           make_directory_structure, sanitize_name, get_timestamped_log_path)
+from openaudible_to_audiobookshelf.audio_bookshelf import (
+    get_all_books,
+    get_audio_bookshelf_recent_books,
+    process_audio_books,
+    scan_library_for_books,
+)
+from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner
+from openaudible_to_audiobookshelf.config import Config
+from openaudible_to_audiobookshelf.utils import (
+    _parse_date,
+    find_existing_series_folder,
+    generate_libation_json,
+    get_timestamped_log_path,
+    make_directory_structure,
+    sanitize_name,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -69,7 +79,9 @@ def process_libation_book_json(book_data: dict, file_locations: dict = None) -> 
         else book_data.get("Title")
     )
 
-    series_sequence = book_data.get("SeriesOrder").split()[0] if book_data.get("SeriesOrder") else ""
+    series_sequence = (
+        book_data.get("SeriesOrder").split()[0] if book_data.get("SeriesOrder") else ""
+    )
 
     filename = (
         f"{book_data.get('Title')}: {book_data.get('Subtitle')} [{book_data.get('AudibleProductId')}]"
@@ -125,6 +137,8 @@ def move_audio_book_files(
     source_dir: str,
     libation_file_locations_path: str = "",
     audio_cleaner=None,
+    asins: list[str] | None = None,
+    _tracking: dict | None = None,
 ) -> list:
     """
     This function reads the books JSON file, processes each book, and logs the results.
@@ -159,15 +173,21 @@ def move_audio_book_files(
             with open(libation_file_locations_path, "r") as file:
                 file_locations = json.load(file)
         except (IOError, json.JSONDecodeError) as e:
-            log_file.write(f"{datetime.now()} - Warning: Could not read FileLocationsV2.json: {e}\n")
+            log_file.write(
+                f"{datetime.now()} - Warning: Could not read FileLocationsV2.json: {e}\n"
+            )
             log_file.write(f"{datetime.now()} - Will use constructed paths instead\n")
     # If set to zero go back in time as a way to say go back infinity
     # 9125 days is 25 years
     if purchased_how_long_ago == 0:
         target_date = (datetime.now(timezone.utc) - timedelta(days=9125)).date()
     else:
-        target_date = (datetime.now(timezone.utc) - timedelta(days=purchased_how_long_ago)).date()
+        target_date = (
+            datetime.now(timezone.utc) - timedelta(days=purchased_how_long_ago)
+        ).date()
     books_to_process_in_audio_bookself = []
+    total_in_source = len(books)
+    skipped_reasons: dict[str, str] = {}
     for book in books:
         try:
             if download_program == "OpenAudible":
@@ -180,10 +200,22 @@ def move_audio_book_files(
             # it's too intensive
             if datetime.strptime(purchase_date, "%Y-%m-%d").date() < target_date:
                 continue
+            # ASIN filter: when provided, only process books in the requested set
+            if asins:
+                book_asin = book_data.get("asin", "")
+                if book_asin not in asins:
+                    skipped_reasons[book_data.get("title", "Unknown")] = (
+                        f"ASIN {book_asin} not in requested set"
+                    )
+                    continue
             author_dir = sanitize_name(book_data["author"])
-            series_dir = find_existing_series_folder(
-                author_dir, book_data["series"], destination_dir
-            ) if book_data["series"] else ""
+            series_dir = (
+                find_existing_series_folder(
+                    author_dir, book_data["series"], destination_dir
+                )
+                if book_data["series"]
+                else ""
+            )
             book_title_dir = sanitize_name(book_data["title"])
             audio_file_name = book_data["filename"] + audio_file_extension
 
@@ -197,37 +229,51 @@ def move_audio_book_files(
                     libation_source_dir = os.path.dirname(downloaded_audio_file_path)
                 else:
                     # Fall back to constructed path
-                    libation_source_dir = source_dir + os.sep + book_data["libation_book_folder"]
-                    downloaded_audio_file_path = os.path.join(libation_source_dir, audio_file_name)
+                    libation_source_dir = (
+                        source_dir + os.sep + book_data["libation_book_folder"]
+                    )
+                    downloaded_audio_file_path = os.path.join(
+                        libation_source_dir, audio_file_name
+                    )
 
             if not (os.path.exists(downloaded_audio_file_path)):
                 continue
             audio_book_destination_dir = make_directory_structure(
                 author_dir, series_dir, book_title_dir, destination_dir
             )
-            target_audio_file_path = os.path.join(audio_book_destination_dir, audio_file_name)
+            target_audio_file_path = os.path.join(
+                audio_book_destination_dir, audio_file_name
+            )
 
             if os.path.exists(target_audio_file_path):
                 existing_file_size = os.path.getsize(target_audio_file_path)
                 downloaded_file_size = os.path.getsize(downloaded_audio_file_path)
                 if downloaded_file_size < existing_file_size:
-                    log_file.write(f"{datetime.now()} - INFO - No change for book: {book_data['title']}\n")
+                    log_file.write(
+                        f"{datetime.now()} - INFO - No change for book: {book_data['title']}\n"
+                    )
                     continue
                 else:
-                    log_file.write(f"{book_data['title']} has an existing file but it will be replaced! \n")
+                    log_file.write(
+                        f"{book_data['title']} has an existing file but it will be replaced! \n"
+                    )
                     log_file.write(
                         f"The downloaded file is larger ({downloaded_file_size}) than the existing file \
                             ({existing_file_size}).\n"
                     )
                 print(f"Processing: {book_data['title']}")
-                log_file.write(f"{datetime.now()} - INFO - Processing: {book_data['title']}\n")
+                log_file.write(
+                    f"{datetime.now()} - INFO - Processing: {book_data['title']}\n"
+                )
             books_to_process_in_audio_bookself.append(book_data)
-            
+
             # Clean audio file if profanity cleaning is enabled
             file_to_process = downloaded_audio_file_path
             if audio_cleaner:
-                file_to_process = audio_cleaner.process_audio_file(downloaded_audio_file_path, book_data)
-            
+                file_to_process = audio_cleaner.process_audio_file(
+                    downloaded_audio_file_path, book_data
+                )
+
             if os.path.exists(file_to_process):
                 if copy_instead_of_move:
                     shutil.copy2(file_to_process, audio_book_destination_dir)
@@ -242,8 +288,19 @@ def move_audio_book_files(
             if libation_folder_cleanup and not copy_instead_of_move:
                 shutil.rmtree(libation_source_dir)
         except Exception as e:
-            error_title = book_data.get("title", "Unknown Book") if "book_data" in locals() else "Unknown Book"
-            log_file.write(f"{datetime.now()} - ERROR - An error occurred while processing {error_title}: {e}\n")
+            error_title = (
+                book_data.get("title", "Unknown Book")
+                if "book_data" in locals()
+                else "Unknown Book"
+            )
+            log_file.write(
+                f"{datetime.now()} - ERROR - An error occurred while processing {error_title}: {e}\n"
+            )
+
+    if _tracking is not None:
+        _tracking["skipped"] = skipped_reasons
+        _tracking["total"] = total_in_source
+        _tracking["applied_asins"] = asins
 
     return books_to_process_in_audio_bookself
 
@@ -252,11 +309,16 @@ def move_audio_book_files(
 # Step functions — each runs one phase and returns a result dict
 # ---------------------------------------------------------------------------
 
-def _run_libationcli(args: list[str], timeout: int = 600, cli_path: str = "libationcli") -> dict:
+
+def _run_libationcli(
+    args: list[str], timeout: int = 600, cli_path: str = "libationcli"
+) -> dict:
     """Run a libationcli subcommand and return structured results."""
     cmd = [cli_path] + args
     LOGGER.info("Running: %s", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, check=False, timeout=timeout
+    )
     return {
         "success": result.returncode == 0,
         "stdout": result.stdout,
@@ -294,9 +356,7 @@ def step_export(config: Config) -> dict:
     json_path = getattr(config, "books_json_path", "")
     if not json_path or "OpenAudible" in json_path:
         json_path = os.path.join(config.source_audio_book_directory, "libation.json")
-    result = _run_libationcli(
-        ["export", "--path", json_path, "--json"], cli_path=cli
-    )
+    result = _run_libationcli(["export", "--path", json_path, "--json"], cli_path=cli)
     return {
         "step": "export",
         "success": result["success"],
@@ -305,8 +365,20 @@ def step_export(config: Config) -> dict:
     }
 
 
-def step_organize(config: Config, log_file=None) -> dict:
-    """Move/copy audio files into the Author/Series/Title directory tree."""
+def step_organize(
+    config: Config, log_file=None, asins: list[str] | None = None
+) -> dict:
+    """Move/copy audio files into the Author/Series/Title directory tree.
+
+    Args:
+        config: Pipeline configuration.
+        log_file: Optional file-like object for logging.
+        asins: Optional list of ASINs to restrict processing to. When provided,
+            books whose ASIN is not in this list are skipped and recorded in
+            the return dict's ``skipped`` / ``skipped_reasons`` fields. When
+            None or empty, all date-filtered books are processed (backward
+            compatible).
+    """
     if log_file is None:
         log_file = io.StringIO()
 
@@ -318,6 +390,7 @@ def step_organize(config: Config, log_file=None) -> dict:
     if getattr(config, "enable_profanity_cleaning", False):
         audio_cleaner = AudioCleaner(config, log_file)
 
+    tracking: dict = {}
     processed = move_audio_book_files(
         audio_file_extension=config.audio_file_extension,
         books_json_path=json_path,
@@ -328,8 +401,12 @@ def step_organize(config: Config, log_file=None) -> dict:
         log_file=log_file,
         purchased_how_long_ago=getattr(config, "purchased_how_long_ago", 0),
         source_dir=config.source_audio_book_directory,
-        libation_file_locations_path=getattr(config, "libation_file_locations_path", ""),
+        libation_file_locations_path=getattr(
+            config, "libation_file_locations_path", ""
+        ),
         audio_cleaner=audio_cleaner,
+        asins=asins,
+        _tracking=tracking,
     )
 
     if audio_cleaner:
@@ -343,6 +420,10 @@ def step_organize(config: Config, log_file=None) -> dict:
         "success": True,
         "processed_count": len(processed),
         "moved": moved,
+        "skipped": list(tracking.get("skipped", {}).keys()),
+        "skipped_reasons": tracking.get("skipped", {}),
+        "total_in_source": tracking.get("total", 0),
+        "applied_asins": tracking.get("applied_asins") or [],
         "destination_dir": config.destination_book_directory,
         "log": log_content,
         "_book_list": processed,
@@ -378,7 +459,9 @@ def step_match(config: Config, book_list: list | None = None, log_file=None) -> 
         days_ago=getattr(config, "purchased_how_long_ago", 7),
         book_list=book_list or [],
     )
-    results = process_audio_books(recent, config.server_url, config.abs_api_token, log_file)
+    results = process_audio_books(
+        recent, config.server_url, config.abs_api_token, log_file
+    )
     log_content = log_file.getvalue() if isinstance(log_file, io.StringIO) else ""
     return {
         "step": "match",
@@ -402,13 +485,16 @@ def run_step(step_name: str, config: Config, **kwargs) -> dict:
     """Run a single named pipeline step and return its result dict."""
     fn = _STEP_DISPATCH.get(step_name)
     if fn is None:
-        raise ValueError(f"Unknown step: {step_name!r}. Valid: {', '.join(VALID_STEPS)}")
+        raise ValueError(
+            f"Unknown step: {step_name!r}. Valid: {', '.join(VALID_STEPS)}"
+        )
     return fn(config, **kwargs)
 
 
 # ---------------------------------------------------------------------------
 # main — full pipeline or single step via --step
 # ---------------------------------------------------------------------------
+
 
 def main(*args: str):
     args = Config.from_args(*args)
@@ -438,7 +524,9 @@ def main(*args: str):
         log_file.flush()
 
         if "OpenAudible" in args.books_json_path:
-            args.books_json_path = os.path.join(args.source_audio_book_directory, "libation.json")
+            args.books_json_path = os.path.join(
+                args.source_audio_book_directory, "libation.json"
+            )
             log_file.write(
                 f"{datetime.now()} - INFO - Using source audio book directory for libation.json: "
                 f"{args.books_json_path}\n"
@@ -459,7 +547,7 @@ def main(*args: str):
             )
 
     audio_cleaner = None
-    if getattr(args, 'enable_profanity_cleaning', False):
+    if getattr(args, "enable_profanity_cleaning", False):
         audio_cleaner = AudioCleaner(args, log_file)
         log_file.write(f"{datetime.now()} - INFO - Profanity cleaning enabled\n")
         log_file.flush()
@@ -478,17 +566,23 @@ def main(*args: str):
         audio_cleaner,
     )
 
-    scan_library_for_books(args.server_url, args.library_id, args.abs_api_token, log_file)
+    scan_library_for_books(
+        args.server_url, args.library_id, args.abs_api_token, log_file
+    )
     time.sleep(15)
 
-    books_from_audiobookshelf = get_all_books(args.server_url, args.library_id, args.abs_api_token, log_file)
+    books_from_audiobookshelf = get_all_books(
+        args.server_url, args.library_id, args.abs_api_token, log_file
+    )
     most_recent_books = get_audio_bookshelf_recent_books(
         books_from_audiobookshelf,
         log_file,
         days_ago=args.purchased_how_long_ago,
         book_list=book_list,
     )
-    process_audio_books(most_recent_books, args.server_url, args.abs_api_token, log_file)
+    process_audio_books(
+        most_recent_books, args.server_url, args.abs_api_token, log_file
+    )
 
     if audio_cleaner:
         audio_cleaner.log_statistics()

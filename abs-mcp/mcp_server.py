@@ -7,9 +7,10 @@ and ingesting them into AudioBookShelf. Supports multiple libraries
 
 Designed for SSE transport to be consumed by Moltis or other MCP clients.
 
-Calls directly into the existing openaudible_to_ab.py pipeline and
-modules/ functions -- no duplication of logic.
+Calls directly into the openaudible_to_audiobookshelf package --
+no duplication of logic.
 """
+
 import io
 import json
 import logging
@@ -26,9 +27,6 @@ import requests
 import yaml
 
 ABS_MCP_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = str(ABS_MCP_DIR.parent)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
 
 
 def _load_dotenv(env_file: Path) -> None:
@@ -52,23 +50,34 @@ if _env_path:
 else:
     _load_dotenv(ABS_MCP_DIR / ".env")
 
+from library_parser import LibraryDataParser
 from mcp.server.fastmcp import FastMCP
 from mcp.server.streamable_http import EventStore
 from mcp.types import JSONRPCMessage
-
-from library_parser import LibraryDataParser
-from modules.audio_bookshelf import scan_library_for_books
-from modules.config import Config
-from modules.utils import generate_libation_json
 from tool_metrics import ToolMetricsRecorder
-from openaudible_to_ab import (
-    step_scan, step_download, step_export, step_organize,
-    step_scan_abs, step_match,
-)
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+from openaudible_to_audiobookshelf.audio_bookshelf import scan_library_for_books
+from openaudible_to_audiobookshelf.config import Config
+from openaudible_to_audiobookshelf.pipeline import (
+    step_download,
+    step_export,
+    step_match,
+    step_organize,
+    step_scan,
+    step_scan_abs,
+)
+from openaudible_to_audiobookshelf.utils import generate_libation_json
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
 LOGGER = logging.getLogger("audiobook-ingestion-mcp")
 PARSER = LibraryDataParser()
+
+# Module-level handoff: download_books stores the ASINs it just downloaded,
+# organize_books reads (and clears) them so only those books are processed.
+# Falls back to a disk-scan if the list is empty (e.g. after a process restart).
+_last_downloaded_asins: list[str] = []
 
 
 class InMemoryEventStore(EventStore):
@@ -148,7 +157,9 @@ def _env(name: str, default: str = "") -> str:
 
 
 METRICS = ToolMetricsRecorder(
-    history_path=_env("TOOL_METRICS_PATH", str(ABS_MCP_DIR / "data" / "tool-metrics.jsonl")),
+    history_path=_env(
+        "TOOL_METRICS_PATH", str(ABS_MCP_DIR / "data" / "tool-metrics.jsonl")
+    ),
 )
 
 
@@ -168,9 +179,16 @@ def _elapsed_ms(start_time: float) -> int:
     return int((time.monotonic() - start_time) * 1000)
 
 
-def _record_tool_result(tool_name: str, start_time: float, result: str, success: bool = True) -> str:
+def _record_tool_result(
+    tool_name: str, start_time: float, result: str, success: bool = True
+) -> str:
     """Record response efficiency metrics and return the result unchanged."""
-    return METRICS.record(tool_name=tool_name, result=result, duration_ms=_elapsed_ms(start_time), success=success)
+    return METRICS.record(
+        tool_name=tool_name,
+        result=result,
+        duration_ms=_elapsed_ms(start_time),
+        success=success,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +244,9 @@ def _resolve_library(library: str | None) -> dict:
     return {
         "name": name,
         "library_id": lib_entry.get("library_id", _env("ABS_LIBRARY_ID")),
-        "destination_dir": lib_entry.get("destination_dir", _env("DESTINATION_BOOK_DIRECTORY")),
+        "destination_dir": lib_entry.get(
+            "destination_dir", _env("DESTINATION_BOOK_DIRECTORY")
+        ),
         "media_type": lib_entry.get("media_type", "book"),
         "folder_id": lib_entry.get("folder_id", ""),
         "abs_server_url": lib_entry.get("abs_server_url", _env("ABS_SERVER_URL")),
@@ -238,7 +258,9 @@ def _abs_headers(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def _normalize_limit_offset(limit: int, offset: int, default_limit: int = 25, max_limit: int = 200) -> tuple[int, int]:
+def _normalize_limit_offset(
+    limit: int, offset: int, default_limit: int = 25, max_limit: int = 200
+) -> tuple[int, int]:
     """Normalize pagination inputs with sane bounds for MCP payload size."""
     safe_limit = limit if limit and limit > 0 else default_limit
     safe_limit = min(safe_limit, max_limit)
@@ -299,8 +321,11 @@ def _fetch_abs_series_map(url: str, library_id: str, token: str) -> dict[str, st
             if bid:
                 existing = series_map.get(bid, "")
                 series_map[bid] = f"{existing}, {name}" if existing else name
-    LOGGER.info("Series map: %d books across %d series",
-                len(series_map), len(resp.json().get("results", [])))
+    LOGGER.info(
+        "Series map: %d books across %d series",
+        len(series_map),
+        len(resp.json().get("results", [])),
+    )
     return series_map
 
 
@@ -354,7 +379,10 @@ def _load_or_refresh_abs_cache(
         with open(cache_path, "w") as f:
             json.dump(cache_data, f)
         return items, {"refreshed": True, "fetched_at": now}
-    return cache_data.get("items", []), {"refreshed": False, "fetched_at": int(cache_data.get("fetched_at", 0) or 0)}
+    return cache_data.get("items", []), {
+        "refreshed": False,
+        "fetched_at": int(cache_data.get("fetched_at", 0) or 0),
+    }
 
 
 def _flatten_abs_item(item: dict) -> dict:
@@ -372,13 +400,20 @@ def _flatten_abs_item(item: dict) -> dict:
     }
 
 
-def _filter_abs_items(items: list[dict], query: str | None, title: str | None, author: str | None, series: str | None) -> list[dict]:
+def _filter_abs_items(
+    items: list[dict],
+    query: str | None,
+    title: str | None,
+    author: str | None,
+    series: str | None,
+) -> list[dict]:
     """Filter ABS items by broad and field-specific substring checks."""
     result = items
     if query:
         q = query.lower()
         result = [
-            item for item in result
+            item
+            for item in result
             if q in item.get("title", "").lower()
             or q in item.get("author", "").lower()
             or q in item.get("series", "").lower()
@@ -435,16 +470,21 @@ def _build_config(
     cfg.destination_book_directory = destination_dir or lib["destination_dir"]
     cfg.audio_file_extension = _r(audio_file_extension, "AUDIO_FILE_EXTENSION", ".m4b")
     cfg.copy_instead_of_move = (
-        copy_instead_of_move if copy_instead_of_move is not None
+        copy_instead_of_move
+        if copy_instead_of_move is not None
         else _env("COPY_INSTEAD_OF_MOVE", "false").lower() == "true"
     )
     cfg.libation_folder_cleanup = (
-        libation_folder_cleanup if libation_folder_cleanup is not None
+        libation_folder_cleanup
+        if libation_folder_cleanup is not None
         else _env("LIBATION_FOLDER_CLEANUP", "false").lower() == "true"
     )
-    cfg.libation_file_locations_path = _r(libation_file_locations_path, "LIBATION_FILE_LOCATIONS_PATH")
+    cfg.libation_file_locations_path = _r(
+        libation_file_locations_path, "LIBATION_FILE_LOCATIONS_PATH"
+    )
     cfg.enable_profanity_cleaning = (
-        enable_profanity_cleaning if enable_profanity_cleaning is not None
+        enable_profanity_cleaning
+        if enable_profanity_cleaning is not None
         else _env("ENABLE_PROFANITY_CLEANING", "false").lower() == "true"
     )
     cfg.purchased_how_long_ago = purchased_how_long_ago
@@ -567,17 +607,30 @@ def list_library(
     with open(json_path) as f:
         books = json.load(f)
 
-    filtered = PARSER.filter_libation_books(books, status, author, series, title, min_duration, max_duration)
+    filtered = PARSER.filter_libation_books(
+        books, status, author, series, title, min_duration, max_duration
+    )
 
     if sort_by:
         filtered = PARSER.sort_libation_books(filtered, sort_by)
 
-    filters_present = any([status, author, series, title, min_duration is not None, max_duration is not None])
-    paged, effective_limit, safe_offset, next_offset, paginated = PARSER.select_output_slice(
-        filtered,
-        limit,
-        offset,
-        filters_present=filters_present,
+    filters_present = any(
+        [
+            status,
+            author,
+            series,
+            title,
+            min_duration is not None,
+            max_duration is not None,
+        ]
+    )
+    paged, effective_limit, safe_offset, next_offset, paginated = (
+        PARSER.select_output_slice(
+            filtered,
+            limit,
+            offset,
+            filters_present=filters_present,
+        )
     )
 
     summary = [
@@ -593,15 +646,21 @@ def list_library(
         }
         for b in paged
     ]
-    return _record_tool_result("list_library", _tool_start, json.dumps({
-        "total_in_library": len(books),
-        "total_matches": len(filtered),
-        "limit": effective_limit,
-        "offset": safe_offset,
-        "next_offset": next_offset,
-        "paginated": paginated,
-        "books": summary,
-    }))
+    return _record_tool_result(
+        "list_library",
+        _tool_start,
+        json.dumps(
+            {
+                "total_in_library": len(books),
+                "total_matches": len(filtered),
+                "limit": effective_limit,
+                "offset": safe_offset,
+                "next_offset": next_offset,
+                "paginated": paginated,
+                "books": summary,
+            }
+        ),
+    )
 
 
 @mcp.tool()
@@ -649,14 +708,21 @@ def set_book_status(
     cmd.extend(asins)
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    return _record_tool_result("set_book_status", _tool_start, json.dumps({
-        "success": result.returncode == 0,
-        "asins": asins,
-        "status_set": status,
-        "force": force,
-        "stdout": result.stdout.strip(),
-        "stderr": result.stderr.strip(),
-    }), success=result.returncode == 0)
+    return _record_tool_result(
+        "set_book_status",
+        _tool_start,
+        json.dumps(
+            {
+                "success": result.returncode == 0,
+                "asins": asins,
+                "status_set": status,
+                "force": force,
+                "stdout": result.stdout.strip(),
+                "stderr": result.stderr.strip(),
+            }
+        ),
+        success=result.returncode == 0,
+    )
 
 
 @mcp.tool()
@@ -676,7 +742,16 @@ def download_books(
     _tool_start = time.monotonic()
     cfg = _build_config(libation_cli=libation_cli, asins=asins)
     result = step_download(cfg)
-    return _record_tool_result("download_books", _tool_start, json.dumps(result), success=not bool(result.get("error")))
+    # Stash the just-downloaded ASINs so a subsequent organize_books call can
+    # limit itself to those books.
+    global _last_downloaded_asins
+    _last_downloaded_asins = result.get("asins", []) or []
+    return _record_tool_result(
+        "download_books",
+        _tool_start,
+        json.dumps(result),
+        success=not bool(result.get("error")),
+    )
 
 
 @mcp.tool()
@@ -695,7 +770,12 @@ def export_library(
     _tool_start = time.monotonic()
     cfg = _build_config(source_dir=source_dir, libation_cli=libation_cli)
     result = step_export(cfg)
-    return _record_tool_result("export_library", _tool_start, json.dumps(result), success=not bool(result.get("error")))
+    return _record_tool_result(
+        "export_library",
+        _tool_start,
+        json.dumps(result),
+        success=not bool(result.get("error")),
+    )
 
 
 @mcp.tool()
@@ -734,8 +814,11 @@ def organize_books(
     user_specified_ext = audio_file_extension is not None
 
     cfg = _build_config(
-        library=library, source_dir=source_dir, destination_dir=destination_dir,
-        audio_file_extension=audio_file_extension, copy_instead_of_move=copy_instead_of_move,
+        library=library,
+        source_dir=source_dir,
+        destination_dir=destination_dir,
+        audio_file_extension=audio_file_extension,
+        copy_instead_of_move=copy_instead_of_move,
         libation_folder_cleanup=libation_folder_cleanup,
         libation_file_locations_path=libation_file_locations_path,
         enable_profanity_cleaning=enable_profanity_cleaning,
@@ -747,14 +830,29 @@ def organize_books(
         if detected and detected != cfg.audio_file_extension:
             LOGGER.info(
                 "Auto-detected audio extension %s (configured: %s)",
-                detected, cfg.audio_file_extension,
+                detected,
+                cfg.audio_file_extension,
             )
             cfg.audio_file_extension = detected
 
-    result = step_organize(cfg)
+    # Resolve which ASINs to organize: prefer the in-memory handoff from the
+    # most recent download_books call; fall back to scanning the source
+    # directory for audiobook files (catches process-restart edge case).
+    global _last_downloaded_asins
+    download_asins = _last_downloaded_asins
+    _last_downloaded_asins = []
+    if not download_asins:
+        download_asins = _extract_asins_from_dir(cfg.source_audio_book_directory)
+
+    result = step_organize(cfg, asins=download_asins if download_asins else None)
     clean = {k: v for k, v in result.items() if not k.startswith("_")}
     clean["audio_file_extension"] = cfg.audio_file_extension
-    return _record_tool_result("organize_books", _tool_start, json.dumps(clean), success=not bool(clean.get("error")))
+    return _record_tool_result(
+        "organize_books",
+        _tool_start,
+        json.dumps(clean),
+        success=not bool(clean.get("error")),
+    )
 
 
 def _detect_audio_extension(source_dir: Path) -> str:
@@ -773,6 +871,25 @@ def _detect_audio_extension(source_dir: Path) -> str:
     if not counts:
         return ""
     return max(counts, key=lambda e: (e == ".m4b", counts[e]))
+
+
+# Audible ASINs look like "B0" + 8 alphanumerics; Libation embeds them in
+# filenames as e.g. "Title [B0F94NGCD1].m4b".
+_ASIN_PATTERN = re.compile(r"\[(B0[A-Z0-9]{8})\]")
+
+
+def _extract_asins_from_dir(source_dir: str) -> list[str]:
+    """Scan source directory for audiobook files and extract ASINs from filenames."""
+    asins: set[str] = set()
+    if not os.path.isdir(source_dir):
+        return []
+    for root, _, files in os.walk(source_dir):
+        for fname in files:
+            if fname.endswith((".m4b", ".mp3")):
+                m = _ASIN_PATTERN.search(fname)
+                if m:
+                    asins.add(m.group(1))
+    return sorted(asins)
 
 
 @mcp.tool()
@@ -796,11 +913,18 @@ def scan_audiobookshelf(
     """
     _tool_start = time.monotonic()
     cfg = _build_config(
-        library=library, abs_server_url=abs_server_url,
-        abs_library_id=abs_library_id, abs_api_token=abs_api_token,
+        library=library,
+        abs_server_url=abs_server_url,
+        abs_library_id=abs_library_id,
+        abs_api_token=abs_api_token,
     )
     result = step_scan_abs(cfg, wait=wait)
-    return _record_tool_result("scan_audiobookshelf", _tool_start, json.dumps(result), success=not bool(result.get("error")))
+    return _record_tool_result(
+        "scan_audiobookshelf",
+        _tool_start,
+        json.dumps(result),
+        success=not bool(result.get("error")),
+    )
 
 
 @mcp.tool()
@@ -866,7 +990,8 @@ def delete_library_items(
     files_cleaned = []
     if cleanup_files:
         files_cleaned = _cleanup_item_files(
-            items_data, lib["destination_dir"],
+            items_data,
+            lib["destination_dir"],
             _r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY"),
         )
 
@@ -932,7 +1057,10 @@ def _clean_source_by_audio_files(source: Path, item: dict, entry: dict) -> None:
     if not source.is_dir():
         return
     audio_files = item.get("media", {}).get("audioFiles", [])
-    filenames = {Path(af.get("metadata", {}).get("filename", "")).stem.lower() for af in audio_files}
+    filenames = {
+        Path(af.get("metadata", {}).get("filename", "")).stem.lower()
+        for af in audio_files
+    }
     filenames.discard("")
 
     for child in source.iterdir():
@@ -977,12 +1105,19 @@ def match_audiobookshelf(
     """
     _tool_start = time.monotonic()
     cfg = _build_config(
-        library=library, abs_server_url=abs_server_url,
-        abs_library_id=abs_library_id, abs_api_token=abs_api_token,
+        library=library,
+        abs_server_url=abs_server_url,
+        abs_library_id=abs_library_id,
+        abs_api_token=abs_api_token,
         purchased_how_long_ago=days_ago,
     )
     result = step_match(cfg, book_list=book_list)
-    return _record_tool_result("match_audiobookshelf", _tool_start, json.dumps(result), success=not bool(result.get("error")))
+    return _record_tool_result(
+        "match_audiobookshelf",
+        _tool_start,
+        json.dumps(result),
+        success=not bool(result.get("error")),
+    )
 
 
 @mcp.tool()
@@ -1027,14 +1162,20 @@ def ingest_books(
     """
     _tool_start = time.monotonic()
     cfg = _build_config(
-        library=library, source_dir=source_dir, destination_dir=destination_dir,
-        audio_file_extension=audio_file_extension, copy_instead_of_move=copy_instead_of_move,
+        library=library,
+        source_dir=source_dir,
+        destination_dir=destination_dir,
+        audio_file_extension=audio_file_extension,
+        copy_instead_of_move=copy_instead_of_move,
         libation_folder_cleanup=libation_folder_cleanup,
         libation_file_locations_path=libation_file_locations_path,
         enable_profanity_cleaning=enable_profanity_cleaning,
         purchased_how_long_ago=purchased_how_long_ago,
-        abs_server_url=abs_server_url, abs_library_id=abs_library_id,
-        abs_api_token=abs_api_token, libation_cli=libation_cli, asins=asins,
+        abs_server_url=abs_server_url,
+        abs_library_id=abs_library_id,
+        abs_api_token=abs_api_token,
+        libation_cli=libation_cli,
+        asins=asins,
     )
     results = {}
 
@@ -1049,7 +1190,9 @@ def ingest_books(
 
     LOGGER.info("Step 4/6: Organizing files")
     organize_result = step_organize(cfg)
-    results["organize"] = {k: v for k, v in organize_result.items() if not k.startswith("_")}
+    results["organize"] = {
+        k: v for k, v in organize_result.items() if not k.startswith("_")
+    }
     book_list = organize_result.get("_book_list", [])
 
     if book_list:
@@ -1104,7 +1247,9 @@ def get_status(
     if url:
         try:
             resp = requests.get(f"{url}/status", timeout=5)
-            status["abs_status"] = resp.json() if resp.ok else f"HTTP {resp.status_code}"
+            status["abs_status"] = (
+                resp.json() if resp.ok else f"HTTP {resp.status_code}"
+            )
         except Exception as e:
             status["abs_status"] = f"unreachable: {e}"
     else:
@@ -1177,27 +1322,35 @@ def list_abs_library(
     filtered = PARSER.filter_abs_items(flattened, query, title, author, series)
     sorted_items = PARSER.sort_abs_items(filtered, sort_by)
     filters_present = any([query, title, author, series])
-    paged, effective_limit, safe_offset, next_offset, paginated = PARSER.select_output_slice(
-        sorted_items,
-        limit,
-        offset,
-        filters_present=filters_present,
+    paged, effective_limit, safe_offset, next_offset, paginated = (
+        PARSER.select_output_slice(
+            sorted_items,
+            limit,
+            offset,
+            filters_present=filters_present,
+        )
     )
-    return _record_tool_result("list_abs_library", _tool_start, json.dumps({
-        "library": lib["name"] or "(default)",
-        "cache": {
-            "path": str(cache_path),
-            "refreshed": cache_meta["refreshed"],
-            "fetched_at": cache_meta["fetched_at"],
-        },
-        "total_in_library": len(flattened),
-        "total_matches": len(sorted_items),
-        "limit": effective_limit,
-        "offset": safe_offset,
-        "next_offset": next_offset,
-        "paginated": paginated,
-        "items": paged,
-    }))
+    return _record_tool_result(
+        "list_abs_library",
+        _tool_start,
+        json.dumps(
+            {
+                "library": lib["name"] or "(default)",
+                "cache": {
+                    "path": str(cache_path),
+                    "refreshed": cache_meta["refreshed"],
+                    "fetched_at": cache_meta["fetched_at"],
+                },
+                "total_in_library": len(flattened),
+                "total_matches": len(sorted_items),
+                "limit": effective_limit,
+                "offset": safe_offset,
+                "next_offset": next_offset,
+                "paginated": paginated,
+                "items": paged,
+            }
+        ),
+    )
 
 
 @mcp.tool()
@@ -1232,29 +1385,43 @@ def search_abs_library(
 
     payload = resp.json()
     if isinstance(payload, dict):
-        raw_results = payload.get("book", []) or payload.get("results", []) or payload.get("items", [])
+        raw_results = (
+            payload.get("book", [])
+            or payload.get("results", [])
+            or payload.get("items", [])
+        )
     elif isinstance(payload, list):
         raw_results = payload
     else:
         raw_results = []
 
-    flattened = [_flatten_abs_item(item) for item in raw_results if isinstance(item, dict)]
-    paged, effective_limit, safe_offset, next_offset, paginated = PARSER.select_output_slice(
-        flattened,
-        limit,
-        offset,
-        filters_present=True,
+    flattened = [
+        _flatten_abs_item(item) for item in raw_results if isinstance(item, dict)
+    ]
+    paged, effective_limit, safe_offset, next_offset, paginated = (
+        PARSER.select_output_slice(
+            flattened,
+            limit,
+            offset,
+            filters_present=True,
+        )
     )
-    return _record_tool_result("search_abs_library", _tool_start, json.dumps({
-        "library": lib["name"] or "(default)",
-        "query": query,
-        "total_matches": len(flattened),
-        "limit": effective_limit,
-        "offset": safe_offset,
-        "next_offset": next_offset,
-        "paginated": paginated,
-        "items": paged,
-    }))
+    return _record_tool_result(
+        "search_abs_library",
+        _tool_start,
+        json.dumps(
+            {
+                "library": lib["name"] or "(default)",
+                "query": query,
+                "total_matches": len(flattened),
+                "limit": effective_limit,
+                "offset": safe_offset,
+                "next_offset": next_offset,
+                "paginated": paginated,
+                "items": paged,
+            }
+        ),
+    )
 
 
 def _extract_series_names(item: dict) -> str:
@@ -1292,7 +1459,9 @@ def get_source_status(
     result: dict = {}
     result["source"] = _scan_directory(src, "source", include_folders=True)
     if dest:
-        result["destination"] = _scan_directory(dest, "destination", include_folders=detail)
+        result["destination"] = _scan_directory(
+            dest, "destination", include_folders=detail
+        )
         result["destination"]["detail"] = detail
     return _record_tool_result("get_source_status", _tool_start, json.dumps(result))
 
@@ -1307,11 +1476,13 @@ def get_tool_metrics(limit: int = 10) -> str:
     """Return recent in-memory response efficiency metrics."""
     safe_limit = max(min(limit, 50), 1)
     records = METRICS.get_recent(safe_limit)
-    return json.dumps({
-        "limit": safe_limit,
-        "records": records,
-        "summary": _summarize_metric_records(records),
-    })
+    return json.dumps(
+        {
+            "limit": safe_limit,
+            "records": records,
+            "summary": _summarize_metric_records(records),
+        }
+    )
 
 
 @mcp.tool()
@@ -1330,17 +1501,19 @@ def query_tool_metrics_history(
         limit=limit,
         offset=offset,
     )
-    return json.dumps({
-        "filters": {
-            "tool_name": tool_name,
-            "since": since,
-            "until": until,
-            "limit": max(min(limit, 500), 1),
-            "offset": max(offset, 0),
-        },
-        "records": records,
-        "summary": summary,
-    })
+    return json.dumps(
+        {
+            "filters": {
+                "tool_name": tool_name,
+                "since": since,
+                "until": until,
+                "limit": max(min(limit, 500), 1),
+                "offset": max(offset, 0),
+            },
+            "records": records,
+            "summary": summary,
+        }
+    )
 
 
 def _scan_directory(dir_path: str, label: str, include_folders: bool = True) -> dict:
@@ -1525,11 +1698,18 @@ def add_podcast(
     )
     if resp.ok:
         data = resp.json()
-        return _record_tool_result("add_podcast", _tool_start, json.dumps({
-            "success": True,
-            "id": data.get("id"),
-            "title": data.get("media", {}).get("metadata", {}).get("title"),
-        }), success=True)
+        return _record_tool_result(
+            "add_podcast",
+            _tool_start,
+            json.dumps(
+                {
+                    "success": True,
+                    "id": data.get("id"),
+                    "title": data.get("media", {}).get("metadata", {}).get("title"),
+                }
+            ),
+            success=True,
+        )
     return _record_tool_result(
         "add_podcast",
         _tool_start,
@@ -1626,11 +1806,19 @@ def get_podcast_episodes(
         }
         for ep in episodes[:50]
     ]
-    return _record_tool_result("get_podcast_episodes", _tool_start, json.dumps({
-        "podcast_title": data.get("media", {}).get("metadata", {}).get("title", ""),
-        "total_episodes": len(episodes),
-        "episodes": summary,
-    }))
+    return _record_tool_result(
+        "get_podcast_episodes",
+        _tool_start,
+        json.dumps(
+            {
+                "podcast_title": data.get("media", {})
+                .get("metadata", {})
+                .get("title", ""),
+                "total_episodes": len(episodes),
+                "episodes": summary,
+            }
+        ),
+    )
 
 
 @mcp.tool()
@@ -1671,13 +1859,19 @@ def download_podcast_episodes(
 
     data = resp.json()
     episodes = data.get("episodes", [])
-    return _record_tool_result("download_podcast_episodes", _tool_start, json.dumps({
-        "new_episodes_found": len(episodes),
-        "episodes": [
-            {"title": ep.get("title", ""), "published": ep.get("pubDate", "")}
-            for ep in episodes
-        ],
-    }))
+    return _record_tool_result(
+        "download_podcast_episodes",
+        _tool_start,
+        json.dumps(
+            {
+                "new_episodes_found": len(episodes),
+                "episodes": [
+                    {"title": ep.get("title", ""), "published": ep.get("pubDate", "")}
+                    for ep in episodes
+                ],
+            }
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1781,21 +1975,29 @@ def fetch_podcast_feed(
     episodes = []
     for entry in parsed.entries[:max_episodes]:
         enc = entry.enclosures[0] if entry.enclosures else {}
-        episodes.append({
-            "title": entry.get("title", ""),
-            "published": entry.get("published", ""),
-            "duration": entry.get("itunes_duration", ""),
-            "download_url": enc.get("href", ""),
-            "mime_type": enc.get("type", ""),
-            "size_bytes": enc.get("length", ""),
-        })
+        episodes.append(
+            {
+                "title": entry.get("title", ""),
+                "published": entry.get("published", ""),
+                "duration": entry.get("itunes_duration", ""),
+                "download_url": enc.get("href", ""),
+                "mime_type": enc.get("type", ""),
+                "size_bytes": enc.get("length", ""),
+            }
+        )
 
-    return _record_tool_result("fetch_podcast_feed", _tool_start, json.dumps({
-        "feed_url": resolved_feed,
-        "podcast_title": parsed.feed.get("title", ""),
-        "total_episodes_in_feed": len(parsed.entries),
-        "episodes": episodes,
-    }))
+    return _record_tool_result(
+        "fetch_podcast_feed",
+        _tool_start,
+        json.dumps(
+            {
+                "feed_url": resolved_feed,
+                "podcast_title": parsed.feed.get("title", ""),
+                "total_episodes_in_feed": len(parsed.entries),
+                "episodes": episodes,
+            }
+        ),
+    )
 
 
 def _sanitize_filename(name: str) -> str:
@@ -1890,15 +2092,25 @@ def download_podcast_files(
         lib_id = lib["library_id"]
         if url and lib_id and token:
             scan_resp = scan_library_for_books(url, lib_id, token)
-            scan_result = {"success": scan_resp.ok, "status_code": scan_resp.status_code}
+            scan_result = {
+                "success": scan_resp.ok,
+                "status_code": scan_resp.status_code,
+            }
 
-    return _record_tool_result("download_podcast_files", _tool_start, json.dumps({
-        "downloaded": len(downloaded),
-        "errors": len(errors),
-        "files": downloaded,
-        "error_details": errors,
-        "scan_result": scan_result,
-    }), success=len(errors) == 0)
+    return _record_tool_result(
+        "download_podcast_files",
+        _tool_start,
+        json.dumps(
+            {
+                "downloaded": len(downloaded),
+                "errors": len(errors),
+                "files": downloaded,
+                "error_details": errors,
+                "scan_result": scan_result,
+            }
+        ),
+        success=len(errors) == 0,
+    )
 
 
 if __name__ == "__main__":

@@ -1,11 +1,54 @@
+import importlib.util
 import json
 import os
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
-from modules.utils import sanitize_name
-from openaudible_to_ab import make_directory_structure, move_audio_book_files, process_open_audible_book_json
+from openaudible_to_audiobookshelf.config import Config
+from openaudible_to_audiobookshelf.pipeline import (
+    make_directory_structure,
+    move_audio_book_files,
+    process_open_audible_book_json,
+    step_organize,
+)
+from openaudible_to_audiobookshelf.utils import sanitize_name
+
+
+# ---------------------------------------------------------------------------
+# Disk-scan helper import (lives in the MCP server, not the main package).
+# ---------------------------------------------------------------------------
+def _load_mcp_server_module():
+    """Load abs-mcp/mcp_server.py as a module without triggering FastMCP startup."""
+    repo_root = Path(__file__).resolve().parent.parent
+    mcp_dir = repo_root / "abs-mcp"
+    mcp_path = mcp_dir / "mcp_server.py"
+    if not mcp_path.is_file():
+        return None
+    # The MCP module does top-level `from library_parser import ...` so its
+    # directory must be on sys.path.
+    mcp_dir_str = str(mcp_dir)
+    added = mcp_dir_str not in sys.path
+    if added:
+        sys.path.insert(0, mcp_dir_str)
+    try:
+        spec = importlib.util.spec_from_file_location("mcp_server_under_test", mcp_path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except Exception:
+        # FastMCP or other optional deps missing in this environment.
+        return None
+    finally:
+        if added and mcp_dir_str in sys.path:
+            sys.path.remove(mcp_dir_str)
+    return module
+
+
+_MCP_SERVER = _load_mcp_server_module()
 
 
 @pytest.fixture
@@ -32,7 +75,9 @@ def setup_test_environment(tmp_path):
                 "title": "Old Book",
                 "asin": "OLD789",
                 "filename": "old_book",
-                "purchase_date": (datetime.now(timezone.utc) - timedelta(days=10)).date().isoformat(),
+                "purchase_date": (datetime.now(timezone.utc) - timedelta(days=10))
+                .date()
+                .isoformat(),
             }
         ),
         (
@@ -41,7 +86,9 @@ def setup_test_environment(tmp_path):
                 "title": "New Book",
                 "asin": "NEW456",
                 "filename": "new_book",
-                "purchase_date": (datetime.now(timezone.utc) - timedelta(days=5)).date().isoformat(),
+                "purchase_date": (datetime.now(timezone.utc) - timedelta(days=5))
+                .date()
+                .isoformat(),
             }
         ),
     ],
@@ -50,12 +97,16 @@ def test_date_filtering(setup_test_environment, test_data):
 
     args = {
         "audio_file_extension": ".m4b",
-        "books_json_path": os.path.join(setup_test_environment["tmp_path"], "books.json"),
+        "books_json_path": os.path.join(
+            setup_test_environment["tmp_path"], "books.json"
+        ),
         "copy_instead_of_move": False,
         "destination_dir": setup_test_environment["dest_dir"],
         "download_program": "OpenAudible",
         "libation_folder_cleanup": False,
-        "log_file": open(os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"),
+        "log_file": open(
+            os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"
+        ),
         "purchased_how_long_ago": 7,
         "source_dir": setup_test_environment["source_dir"],
     }
@@ -83,12 +134,16 @@ def test_existing_file_handling(setup_test_environment, test_data):
     # Create test data with different file sizes
     args = {
         "audio_file_extension": ".m4b",
-        "books_json_path": os.path.join(setup_test_environment["tmp_path"], "books.json"),
+        "books_json_path": os.path.join(
+            setup_test_environment["tmp_path"], "books.json"
+        ),
         "copy_instead_of_move": False,
         "destination_dir": setup_test_environment["dest_dir"],
         "download_program": "OpenAudible",
         "libation_folder_cleanup": False,
-        "log_file": open(os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"),
+        "log_file": open(
+            os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"
+        ),
         "purchased_how_long_ago": 7,
         "source_dir": setup_test_environment["source_dir"],
     }
@@ -97,7 +152,9 @@ def test_existing_file_handling(setup_test_environment, test_data):
         json.dump([test_data], f)
 
     # Create source file
-    source_path = os.path.join(setup_test_environment["source_dir"], f"{test_data['filename']}.m4b")
+    source_path = os.path.join(
+        setup_test_environment["source_dir"], f"{test_data['filename']}.m4b"
+    )
     with open(source_path, "wb") as f:
         f.write(b"smaller file")  # 12 bytes
 
@@ -133,7 +190,9 @@ def test_error_handling(setup_test_environment, invalid_input):
             destination_dir=setup_test_environment["dest_dir"],
             download_program="OpenAudible",
             libation_folder_cleanup=False,
-            log_file=open(os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"),
+            log_file=open(
+                os.path.join(setup_test_environment["tmp_path"], "test.log"), "a"
+            ),
             purchased_how_long_ago=7,
             source_dir=setup_test_environment["source_dir"],
         )
@@ -164,7 +223,9 @@ def test_sanitize_name(text, expected_transformed_text):
         )
     ],
 )
-def test_make_directory_structure(author: str, series: str, title: str, abs_folder: str, expected_dir: str):
+def test_make_directory_structure(
+    author: str, series: str, title: str, abs_folder: str, expected_dir: str
+):
     output = make_directory_structure(author, series, title, abs_folder)
     assert output == expected_dir
     assert os.path.exists(output)
@@ -202,3 +263,340 @@ def test_make_directory_structure(author: str, series: str, title: str, abs_fold
 def test_process_open_audible_book_json(book_data, expected_book_data):
     processed_book = process_open_audible_book_json(book_data.copy())
     assert processed_book == expected_book_data
+
+
+# ---------------------------------------------------------------------------
+# Task 4a — Unit tests for move_audio_book_files ASIN filtering
+# ---------------------------------------------------------------------------
+
+
+def _build_books_json(tmp_path, books):
+    """Helper: write a list of book dicts to books.json in tmp_path."""
+    path = os.path.join(str(tmp_path), "books.json")
+    with open(path, "w") as f:
+        json.dump(books, f)
+    return path
+
+
+def _make_source_file(source_dir, book):
+    """Helper: create a 0-byte audio file at the OpenAudible source path."""
+    audio_path = os.path.join(source_dir, f"{book['filename']}.m4b")
+    with open(audio_path, "wb") as f:
+        f.write(b"")
+    return audio_path
+
+
+def test_asin_filter_matches_only_specified(setup_test_environment):
+    """With asins=['KEEP123'], only the matching book is moved; the other
+    is recorded in the _tracking['skipped'] dict with a reason."""
+    env = setup_test_environment
+    today = datetime.now(timezone.utc).date().isoformat()
+    keep = {
+        "author": "Author Keep",
+        "title": "Keep Book",
+        "asin": "KEEP123",
+        "filename": "keep_book",
+        "purchase_date": today,
+    }
+    skip = {
+        "author": "Author Skip",
+        "title": "Skip Book",
+        "asin": "SKIP456",
+        "filename": "skip_book",
+        "purchase_date": today,
+    }
+    books_json = _build_books_json(env["tmp_path"], [keep, skip])
+    _make_source_file(env["source_dir"], keep)
+    _make_source_file(env["source_dir"], skip)
+
+    tracking: dict = {}
+    result = move_audio_book_files(
+        audio_file_extension=".m4b",
+        books_json_path=books_json,
+        copy_instead_of_move=False,
+        destination_dir=env["dest_dir"],
+        download_program="OpenAudible",
+        libation_folder_cleanup=False,
+        log_file=open(os.path.join(env["tmp_path"], "test.log"), "a"),
+        purchased_how_long_ago=0,
+        source_dir=env["source_dir"],
+        asins=["KEEP123"],
+        _tracking=tracking,
+    )
+
+    assert len(result) == 1
+    assert result[0]["asin"] == "KEEP123"
+    assert "Skip Book" in tracking["skipped"]
+    assert "KEEP123" not in tracking["skipped"]["Skip Book"]
+    assert tracking["total"] == 2
+    assert tracking["applied_asins"] == ["KEEP123"]
+    # Skipped file should still be in source; matched file should be in dest.
+    assert os.path.exists(os.path.join(env["source_dir"], "skip_book.m4b"))
+    assert not os.path.exists(os.path.join(env["source_dir"], "keep_book.m4b"))
+
+
+def test_asin_filter_none_falls_back(setup_test_environment):
+    """Backward compat: no asins passed -> all date-filtered books processed."""
+    env = setup_test_environment
+    today = datetime.now(timezone.utc).date().isoformat()
+    b1 = {
+        "author": "A1",
+        "title": "T1",
+        "asin": "ASIN1",
+        "filename": "file1",
+        "purchase_date": today,
+    }
+    b2 = {
+        "author": "A2",
+        "title": "T2",
+        "asin": "ASIN2",
+        "filename": "file2",
+        "purchase_date": today,
+    }
+    books_json = _build_books_json(env["tmp_path"], [b1, b2])
+    _make_source_file(env["source_dir"], b1)
+    _make_source_file(env["source_dir"], b2)
+
+    tracking: dict = {}
+    result = move_audio_book_files(
+        audio_file_extension=".m4b",
+        books_json_path=books_json,
+        copy_instead_of_move=False,
+        destination_dir=env["dest_dir"],
+        download_program="OpenAudible",
+        libation_folder_cleanup=False,
+        log_file=open(os.path.join(env["tmp_path"], "test.log"), "a"),
+        purchased_how_long_ago=0,
+        source_dir=env["source_dir"],
+        asins=None,
+        _tracking=tracking,
+    )
+
+    assert len(result) == 2
+    # When asins is None, no skipping happens and tracking reflects that.
+    assert tracking["skipped"] == {}
+    assert tracking["total"] == 2
+    assert tracking["applied_asins"] is None
+
+
+# ---------------------------------------------------------------------------
+# Task 4b — Functional test for _extract_asins_from_dir (MCP disk-scan fallback)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    _MCP_SERVER is None, reason="abs-mcp/mcp_server.py could not be imported"
+)
+def test_extract_asins_from_dir(tmp_path):
+    """Disk scanner finds ASINs in .m4b/.mp3 filenames, ignores other files."""
+    fn = _MCP_SERVER._extract_asins_from_dir
+
+    # Populated dir
+    (tmp_path / "Book A [B0AAA11111].m4b").write_bytes(b"")
+    (tmp_path / "Book B [B0BBB22222].m4b").write_bytes(b"")
+    (tmp_path / "NoAsinHere.m4b").write_bytes(b"")
+    (tmp_path / "not-audio.txt").write_text("ignore me")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "Nested [B0CCC33333].mp3").write_bytes(b"")
+
+    assert fn(str(tmp_path)) == ["B0AAA11111", "B0BBB22222", "B0CCC33333"]
+
+    # Empty dir
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert fn(str(empty)) == []
+
+    # Missing dir
+    assert fn(str(tmp_path / "does_not_exist")) == []
+
+
+# ---------------------------------------------------------------------------
+# Task 4c — Integration test: step_organize with ASINs
+# ---------------------------------------------------------------------------
+
+
+def test_step_organize_with_asins(setup_test_environment):
+    """End-to-end: step_organize with asins moves only the matching file
+    and returns a populated visibility dict."""
+    env = setup_test_environment
+    today = datetime.now(timezone.utc).date().isoformat()
+    match_book = {
+        "author": "Author1",
+        "title": "Match Book",
+        "asin": "MATCH123",
+        "filename": "Match Book [MATCH123]",
+        "purchase_date": today,
+    }
+    skip_book = {
+        "author": "Author2",
+        "title": "Skip Book",
+        "asin": "SKIP999",
+        "filename": "Skip Book [SKIP999]",
+        "purchase_date": today,
+    }
+    books_json = _build_books_json(env["tmp_path"], [match_book, skip_book])
+    _make_source_file(env["source_dir"], match_book)
+    _make_source_file(env["source_dir"], skip_book)
+
+    cfg = Config(
+        source_audio_book_directory=env["source_dir"],
+        destination_book_directory=env["dest_dir"],
+        books_json_path=books_json,
+        audio_file_extension=".m4b",
+        copy_instead_of_move=False,
+        libation_folder_cleanup=False,
+        download_program="OpenAudible",
+        purchased_how_long_ago=0,
+    )
+
+    result = step_organize(cfg, asins=["MATCH123"])
+
+    assert result["step"] == "organize"
+    assert result["processed_count"] == 1
+    assert result["applied_asins"] == ["MATCH123"]
+    assert "Match Book" in result["moved"]
+    assert "Skip Book" in result["skipped"]
+    assert "Skip Book" in result["skipped_reasons"]
+    assert result["total_in_source"] == 2
+    # The matching file should be at the destination tree.
+    expected = os.path.join(
+        env["dest_dir"], "Author1", "Match_Book", "Match Book [MATCH123].m4b"
+    )
+    assert os.path.exists(expected)
+    # The skipped book should NOT be in the destination tree.
+    assert not os.path.exists(os.path.join(env["dest_dir"], "Author2"))
+    # And the skipped source file should still be there.
+    assert os.path.exists(os.path.join(env["source_dir"], "Skip Book [SKIP999].m4b"))
+
+
+# ---------------------------------------------------------------------------
+# Task 4d — MCP handler integration test: download → handoff → organize
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    _MCP_SERVER is None, reason="abs-mcp/mcp_server.py could not be imported"
+)
+def test_mcp_handoff_download_to_organize(monkeypatch, tmp_path):
+    """End-to-end MCP handler chain: download_books stashes ASINs in
+    _last_downloaded_asins, organize_books reads it, forwards to
+    step_organize, then clears it. On a second organize with no prior
+    download, the disk-scan fallback kicks in.
+    """
+    mcp = _MCP_SERVER
+
+    # Seed source dir with two Libation-style files (one matching, one not).
+    src = tmp_path / "Libation" / "Books"
+    src.mkdir(parents=True)
+    (src / "Match Book [B0MATCH123].m4b").write_bytes(b"")
+    (src / "Skip Book [B0SKIP9999].m4b").write_bytes(b"")
+    dst = tmp_path / "abs_audiobooks"
+    dst.mkdir()
+
+    # Reset handoff state so prior tests/sessions can't leak in.
+    mcp._last_downloaded_asins = []
+
+    # Stub _build_config so the handlers don't touch env / libraries.yaml.
+    def _stub_config(**_kwargs):
+        cfg = Config()
+        cfg.source_audio_book_directory = str(src)
+        cfg.destination_book_directory = str(dst)
+        cfg.audio_file_extension = ".m4b"
+        cfg.copy_instead_of_move = False
+        cfg.libation_folder_cleanup = False
+        cfg.download_program = "OpenAudible"
+        cfg.purchased_how_long_ago = 0
+        cfg.libation_file_locations_path = ""
+        cfg.enable_profanity_cleaning = False
+        return cfg
+
+    monkeypatch.setattr(mcp, "_build_config", _stub_config)
+
+    # Skip the audio-extension auto-detect walk to keep the test fast.
+    monkeypatch.setattr(mcp, "_detect_audio_extension", lambda _p: "")
+
+    # Stub _record_tool_result so we don't append to abs-mcp/data/tool-metrics.jsonl
+    # and so the handler's return value is the bare result dict for inspection.
+    # The real handler passes a json.dumps(...) string into _record_tool_result,
+    # so decode it back to a dict for assertion convenience.
+    def _passthrough_result(_name, _t, result, **_k):
+        return json.loads(result) if isinstance(result, str) else result
+
+    monkeypatch.setattr(mcp, "_record_tool_result", _passthrough_result)
+
+    # Stub step_download to return canned output (no real libationcli).
+    monkeypatch.setattr(
+        mcp,
+        "step_download",
+        lambda cfg: {
+            "step": "download",
+            "success": True,
+            "asins": ["B0MATCH123"],
+            "source_dir": cfg.source_audio_book_directory,
+            "detail": {},
+        },
+    )
+
+    # Capture what step_organize is called with.
+    captured: dict = {}
+
+    def _fake_step_organize(cfg, **kwargs):
+        captured["asins"] = kwargs.get("asins")
+        captured["called"] = True
+        return {
+            "step": "organize",
+            "success": True,
+            "processed_count": 1,
+            "moved": ["Match Book"],
+            "skipped": ["Skip Book"],
+            "skipped_reasons": {"Skip Book": "ASIN B0SKIP9999 not in requested set"},
+            "total_in_source": 2,
+            "applied_asins": kwargs.get("asins") or [],
+            "destination_dir": cfg.destination_book_directory,
+            "log": "",
+            "_book_list": [],
+        }
+
+    monkeypatch.setattr(mcp, "step_organize", _fake_step_organize)
+
+    # --- Phase 1: download_books stashes ASINs ---
+    mcp.download_books(asins=["B0MATCH123"])
+    assert mcp._last_downloaded_asins == ["B0MATCH123"], (
+        "download_books should stash requested ASINs in module global; "
+        f"got {mcp._last_downloaded_asins!r}"
+    )
+
+    # --- Phase 2: organize_books reads handoff, forwards, then clears ---
+    result = mcp.organize_books(audio_file_extension=".m4b")
+    assert captured.get("called") is True, (
+        "organize_books should have called step_organize"
+    )
+    assert captured.get("asins") == ["B0MATCH123"], (
+        "organize_books should forward stashed ASINs to step_organize; "
+        f"got {captured.get('asins')!r}"
+    )
+    assert mcp._last_downloaded_asins == [], (
+        "handoff is one-shot; global should be cleared after organize_books; "
+        f"got {mcp._last_downloaded_asins!r}"
+    )
+    assert result["step"] == "organize"
+    assert result["processed_count"] == 1
+
+    # --- Phase 3: no prior download → disk-scan fallback kicks in ---
+    captured.clear()
+    mcp._last_downloaded_asins = []  # simulate process restart / no prior download
+    result2 = mcp.organize_books(audio_file_extension=".m4b")
+    assert captured.get("called") is True
+    # The disk-scan returns every [B0…] ASIN it finds in the source dir;
+    # downstream step_organize does the include/exclude decision. So we
+    # assert the fallback path fired (non-empty list, contains our ASIN)
+    # rather than asserting an exact list.
+    fallback_asins = captured.get("asins")
+    assert isinstance(fallback_asins, list) and "B0MATCH123" in fallback_asins, (
+        "disk-scan fallback should derive ASINs from source-dir filenames "
+        f"and include B0MATCH123; got {fallback_asins!r}"
+    )
+    # Global should still be cleared after fallback path.
+    assert mcp._last_downloaded_asins == []
+    assert result2["step"] == "organize"
