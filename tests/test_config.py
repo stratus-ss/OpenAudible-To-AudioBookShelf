@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from modules.config import Config, ConfigError
+from openaudible_to_audiobookshelf.config import Config, ConfigError
 
 # Real integration test configuration from environment variables
 REAL_ABS_SERVER_URL = os.getenv("ABS_SERVER_URL", "")
@@ -80,7 +80,7 @@ def test_yaml_load_file_not_found(tmp_path: Path, caplog: pytest.LogCaptureFixtu
     with pytest.raises(FileNotFoundError, match="YAML file not found"):
         config_obj._load_yaml()
 
-    assert caplog.record_tuples == [("modules.config", logging.CRITICAL, "YAML file not found: %s" % yamlfile)]
+    assert caplog.record_tuples == [("openaudible_to_audiobookshelf.config", logging.CRITICAL, "YAML file not found: %s" % yamlfile)]
 
 
 def test_yaml_load_invalid_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
@@ -92,7 +92,7 @@ def test_yaml_load_invalid_file(tmp_path: Path, caplog: pytest.LogCaptureFixture
     with pytest.raises(yaml.YAMLError, match="Error parsing YAML file"):
         config_obj._load_yaml()
 
-    assert caplog.record_tuples == [("modules.config", logging.CRITICAL, "Error parsing YAML file")]
+    assert caplog.record_tuples == [("openaudible_to_audiobookshelf.config", logging.CRITICAL, "Error parsing YAML file")]
 
 
 def test_cli_yaml_and_args(
@@ -147,32 +147,32 @@ def assert_config_correct(config_dict: dict, config_obj: Config) -> None:
             True,
             [
                 (
-                    "modules.config",
+                    "openaudible_to_audiobookshelf.config",
                     logging.CRITICAL,
                     "API token not specified in YAML or command line",
                 ),
                 (
-                    "modules.config",
+                    "openaudible_to_audiobookshelf.config",
                     logging.CRITICAL,
                     "Destination directory not specified in YAML or command line",
                 ),
                 (
-                    "modules.config",
+                    "openaudible_to_audiobookshelf.config",
                     logging.CRITICAL,
                     "Library ID not specified in YAML or command line",
                 ),
                 (
-                    "modules.config",
+                    "openaudible_to_audiobookshelf.config",
                     logging.CRITICAL,
                     "Server URL not specified in YAML or command line",
                 ),
                 (
-                    "modules.config",
+                    "openaudible_to_audiobookshelf.config",
                     logging.CRITICAL,
                     "Source directory not specified in YAML or command line",
                 ),
                 (
-                    "modules.config",
+                    "openaudible_to_audiobookshelf.config",
                     logging.CRITICAL,
                     "Books JSON file not specified in YAML or command line",
                 ),

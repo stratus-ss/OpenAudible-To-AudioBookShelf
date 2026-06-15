@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from monkeyplug.monkeyplug import WhisperPlugger
-from modules.utils import sanitize_name, log_message
+from openaudible_to_audiobookshelf.utils import sanitize_name, log_message
 
 
 class AudioCleaningError(Exception):

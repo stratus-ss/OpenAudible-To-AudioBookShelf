@@ -14,7 +14,7 @@ Everything you need to install, configure, and run the MCP server from scratch.
 
 ### What You Need Before Starting
 
-This MCP server is a thin wrapper around the parent project's pipeline (`openaudible_to_ab.py` and `modules/`). It does not duplicate logic -- it imports and calls those functions directly. You need three things running:
+This MCP server is a thin wrapper around the parent project's `openaudible_to_audiobookshelf` package. It does not duplicate logic -- it imports and calls those functions directly. The parent package must be installed in editable mode (`pip install -e .` from the repo root) before running the MCP server. You need three things running:
 
 1. **Libation** -- an open-source Audible library manager that downloads and decrypts your audiobooks. The MCP server calls `libationcli` (Libation's CLI) to scan your Audible account, download books, and export metadata as JSON.
 
@@ -777,3 +777,17 @@ query_tool_metrics_history(tool_name="list_library", since="2026-04-01T00:00:00Z
 - **Compact JSON responses:** Tool responses are emitted as compact JSON (no pretty-print indentation) to reduce token usage.
 - **Rough token estimate formula:** Metrics use `ceil(response_bytes / 4)` as a lightweight approximation for JSON/English payload token usage.
 - **Metrics retention:** Recent metrics keep only the last 50 calls in memory; persisted JSONL auto-rotates when it grows past 2000 lines (keeps most recent 1000).
+
+### rough_tokens Field Explanation
+
+The `rough_tokens` field in tool metrics is an **approximate token count estimate** for the LLM response associated with a tool call. This is not an exact count -- it's derived from the response size in bytes and a rough characters-per-token ratio (~4 chars per token for typical English text). Use this field to gauge relative cost and response length across different tool calls, not for precise billing or audit purposes.
+
+**Example response:**
+```json
+{
+  "tool_name": "list_library",
+  "response_bytes": 1234,
+  "rough_tokens": 285,
+  "duration_ms": 450
+}
+```

@@ -8,7 +8,7 @@ found in the actual library to ensure consistency.
 import os
 import pytest
 from pathlib import Path
-from modules.utils import find_existing_series_folder, sanitize_name
+from openaudible_to_audiobookshelf.utils import find_existing_series_folder, sanitize_name
 
 
 class TestRealLibraryPatterns:

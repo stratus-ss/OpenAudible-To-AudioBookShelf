@@ -7,9 +7,9 @@ VENV_PIP = $(VENV_DIR)/bin/pip
 
 # Project configuration
 LINE_LENGTH = 120
-SOURCE_DIR = modules
+SOURCE_DIR = src/openaudible_to_audiobookshelf
 TESTS_DIR = tests
-MAIN_SCRIPT = openaudible_to_ab.py
+MAIN_SCRIPT = src/openaudible_to_audiobookshelf/pipeline.py
 
 # Always use venv python for development commands
 BLACK_CMD = $(VENV_PYTHON) -m black --line-length=$(LINE_LENGTH)
@@ -123,7 +123,7 @@ clean:
 	@find . -name "*.pyc" -delete
 	@find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 	@rm -rf htmlcov/ .coverage .pytest_cache/ .mypy_cache/
-	@rm -rf modules.egg-info/ build/ dist/
+	@rm -rf openaudible_to_audiobookshelf.egg-info/ build/ dist/
 	@echo "✅ Cleanup completed (virtual environment preserved)"
 
 # Clean Python compiled files only
@@ -141,7 +141,7 @@ clean-all:
 	@find . -name "*.pyo" -delete
 	@find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 	@rm -rf htmlcov/ .coverage .pytest_cache/ .mypy_cache/
-	@rm -rf modules.egg-info/ build/ dist/
+	@rm -rf openaudible_to_audiobookshelf.egg-info/ build/ dist/
 	@rm -rf $(VENV_DIR)
 	@echo "✅ Complete cleanup finished (including virtual environment)"
 
@@ -210,9 +210,9 @@ config:
 	@echo "  Mypy: $$($(VENV_PYTHON) -m mypy --version 2>/dev/null || echo 'Not installed (run make install-dev)')"
 	@echo "  Pytest: $$($(VENV_PYTHON) -m pytest --version 2>/dev/null | head -1 || echo 'Not installed (run make install-dev)')"
 	@echo "  Line length: $(LINE_LENGTH)"
-	@echo "  Source directory: $(SOURCE_DIR)"
+	@echo "  Source package: $(SOURCE_DIR)"
 	@echo "  Tests directory: $(TESTS_DIR)"
-	@echo "  Main script: $(MAIN_SCRIPT)"
+	@echo "  Main script (CLI entry): $(MAIN_SCRIPT)"
 
 # Show help
 help:
@@ -230,7 +230,7 @@ help:
 	@echo "  clean-all    - Remove everything including virtual environment"
 	@echo ""
 	@echo "🚀 Running:"
-	@echo "  run          - Run the main script ($(MAIN_SCRIPT))"
+	@echo "  run          - Run the pipeline (openaudible-to-abs or python -m openaudible_to_audiobookshelf)"
 	@echo "  run-help     - Show command-line options for main script"
 	@echo ""
 	@echo "🧪 Testing:"

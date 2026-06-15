@@ -282,6 +282,7 @@ log/
 # Exclude all markdown files except README.md
 *.md
 !README.md
+!abs-mcp/skills/*.md
 
 # Exclude sample_files directory (contains private testing files)
 sample_files/
@@ -310,3 +311,31 @@ docs/_build/
 # Downloaded or generated data
 data/
 downloads/
+
+# --- Phase 5a scaffold additions ---
+# Coverage
+.coverage
+htmlcov/
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# Backup artifacts (removed during scaffold)
+modules/audio_cleaner.py.backup-*
+
+# Python build artifacts
+*.egg-info/
+
+# --- Credential / environment-specific files ---
+arguments-test.yaml
+test_arguments.yaml
+abs-mcp/libraries.yaml
+abs-mcp/libraries.test.yaml
+
+# Runtime / debug artifacts
+swear_list.json
+book_processing.txt
+*.out
+
+# Pre-refactor backups
+backups/

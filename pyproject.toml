@@ -12,7 +12,10 @@ requires-python = ">=3.12"
 dynamic = ["dependencies"]
 
 [tool.setuptools]
-packages = ["modules"]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
@@ -23,3 +26,5 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
 ]
 
+[project.scripts]
+openaudible-to-abs = "openaudible_to_audiobookshelf.pipeline:main"

@@ -16,8 +16,8 @@ sys.modules['monkeyplug'] = MagicMock()
 sys.modules['monkeyplug.monkeyplug'] = MagicMock()
 sys.modules['monkeyplug.audio_chunker'] = MagicMock()
 
-from modules.audio_cleaner import AudioCleaner, AudioCleaningError
-from modules.config import Config
+from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner, AudioCleaningError
+from openaudible_to_audiobookshelf.config import Config
 
 
 class TestAudioCleanerInit:
@@ -53,7 +53,7 @@ class TestAudioCleanerInit:
 class TestProcessAudioFile:
     """Test process_audio_file method."""
 
-    @patch('modules.audio_cleaner.WhisperPlugger')
+    @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
     def test_process_audio_file_handles_exception(self, mock_plugger_class):
         """Test that exceptions during processing return original file."""
         with tempfile.NamedTemporaryFile(suffix=".m4b", delete=False) as tmp:

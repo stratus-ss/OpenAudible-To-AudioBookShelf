@@ -7,7 +7,7 @@ import requests
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
-from modules.audio_bookshelf import (
+from openaudible_to_audiobookshelf.audio_bookshelf import (
     get_all_books,
     scan_library_for_books,
     get_audio_bookshelf_recent_books,

@@ -1,0 +1,15 @@
+# Copy to libraries.yaml and fill in your values.
+# Each library maps to an AudioBookShelf library on your server.
+
+default_library: adult
+
+libraries:
+  adult:
+    library_id: "YOUR-ADULT-LIBRARY-UUID"
+    destination_dir: "/path/to/adult/audiobooks"
+    media_type: book
+
+  kids:
+    library_id: "YOUR-KIDS-LIBRARY-UUID"
+    destination_dir: "/path/to/kids/audiobooks"
+    media_type: book

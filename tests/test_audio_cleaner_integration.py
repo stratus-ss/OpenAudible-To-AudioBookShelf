@@ -23,7 +23,7 @@ sys.modules['monkeyplug'] = MagicMock()
 sys.modules['monkeyplug.monkeyplug'] = MagicMock()
 sys.modules['monkeyplug.audio_chunker'] = MagicMock()
 
-from modules.audio_cleaner import AudioCleaner, AudioCleaningError
+from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner, AudioCleaningError
 
 
 @pytest.fixture
@@ -162,7 +162,7 @@ class TestInitializeMonkeyplug:
     """Test _initialize_monkeyplug method."""
 
     @patch('os.path.getsize', return_value=100 * 1024 * 1024)  # 100MB file
-    @patch('modules.audio_cleaner.WhisperPlugger')
+    @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
     def test_creates_whisper_plugger_with_correct_params(self, mock_plugger_class, mock_getsize, base_config, mock_log_file):
         """Test that WhisperPlugger is initialized with correct parameters."""
         base_config.swears_file = "/path/to/swears.txt"
@@ -193,7 +193,7 @@ class TestInitializeMonkeyplug:
         assert call_kwargs["saveTranscript"] is True
 
     @patch('os.path.getsize', return_value=100 * 1024 * 1024)  # 100MB file
-    @patch('modules.audio_cleaner.WhisperPlugger')
+    @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
     def test_reuses_existing_transcript(self, mock_plugger_class, mock_getsize, base_config, mock_log_file):
         """Test that existing transcript is passed to WhisperPlugger."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -219,7 +219,7 @@ class TestInitializeMonkeyplug:
             assert call_kwargs["inputTranscript"] == transcript_file
 
     @patch('os.path.getsize', return_value=100 * 1024 * 1024)  # 100MB file
-    @patch('modules.audio_cleaner.WhisperPlugger', side_effect=Exception("Init failed"))
+    @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger', side_effect=Exception("Init failed"))
     def test_raises_audio_cleaning_error_on_failure(self, mock_plugger_class, mock_getsize, base_config, mock_log_file):
         """Test that AudioCleaningError is raised when initialization fails."""
         cleaner = AudioCleaner(base_config, mock_log_file)
@@ -238,7 +238,7 @@ class TestInitializeMonkeyplug:
 class TestProcessAudioFile:
     """Test process_audio_file method - integration with MonkeyPlug."""
 
-    @patch('modules.audio_cleaner.WhisperPlugger')
+    @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
     def test_uses_chunker_for_large_files(self, mock_plugger_class, base_config, mock_log_file):
         """Test that AudioChunker is used for large files."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -272,7 +272,7 @@ class TestProcessAudioFile:
             assert result == output_file
             assert cleaner.total_processed == 1
 
-    @patch('modules.audio_cleaner.WhisperPlugger')
+    @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
     def test_uses_direct_encoding_for_small_files(self, mock_plugger_class, base_config, mock_log_file):
         """Test that direct encoding is used for small files."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -310,7 +310,7 @@ class TestProcessAudioFile:
             assert cleaner.total_processed == 1
             assert cleaner.total_profanities == 2  # len(naughtyWordList)
 
-    @patch('modules.audio_cleaner.WhisperPlugger')
+    @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
     def test_returns_original_file_on_error(self, mock_plugger_class, base_config, mock_log_file):
         """Test that original file is returned when processing fails."""
         with tempfile.TemporaryDirectory() as tmpdir:

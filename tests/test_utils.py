@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from modules.utils import (_parse_date, find_existing_series_folder, 
+from openaudible_to_audiobookshelf.utils import (_parse_date, find_existing_series_folder, 
                            make_directory_structure, sanitize_name)
 
 

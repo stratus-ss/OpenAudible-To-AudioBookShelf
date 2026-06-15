@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from openaudible_to_ab import move_audio_book_files
+from openaudible_to_audiobookshelf.pipeline import move_audio_book_files
 
 
 @pytest.fixture

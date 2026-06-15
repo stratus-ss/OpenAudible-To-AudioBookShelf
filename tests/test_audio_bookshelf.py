@@ -4,7 +4,7 @@ import pytest
 import requests
 from requests.exceptions import HTTPError
 
-from modules.audio_bookshelf import get_all_books, get_audio_bookshelf_recent_books, update_book_series
+from openaudible_to_audiobookshelf.audio_bookshelf import get_all_books, get_audio_bookshelf_recent_books, update_book_series
 
 
 @pytest.fixture
@@ -331,7 +331,7 @@ def test_book_list_matching_no_series(mocker):
 
 def test_update_book_series_sends_patch(mocker):
     """update_book_series should PATCH the correct endpoint with series payload."""
-    mock_patch = mocker.patch("modules.audio_bookshelf.requests.patch")
+    mock_patch = mocker.patch("openaudible_to_audiobookshelf.audio_bookshelf.requests.patch")
     mock_response = mocker.MagicMock()
     mock_response.ok = True
     mock_patch.return_value = mock_response
