@@ -283,6 +283,7 @@ log/
 *.md
 !README.md
 !abs-mcp/skills/*.md
+!docs/*.md
 
 # Exclude sample_files directory (contains private testing files)
 sample_files/
@@ -331,6 +332,14 @@ arguments-test.yaml
 test_arguments.yaml
 abs-mcp/libraries.yaml
 abs-mcp/libraries.test.yaml
+
+# --- Docker overrides (real paths, not committed) ---
+docker/docker-compose.override.yml
+
+# --- Planning / session artifacts (kept on disk, not tracked) ---
+devlogs/
+zed_plans/
+agent_planning/
 
 # Runtime / debug artifacts
 swear_list.json

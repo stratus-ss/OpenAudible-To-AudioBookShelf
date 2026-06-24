@@ -1,0 +1,57 @@
+# docker-compose.yml — Audiobook Ingestion MCP Server
+#
+# Run from the REPO ROOT (one level up from this file):
+#   docker compose -f docker/docker-compose.yml up -d
+#
+# Or with an override file for your real paths:
+#   cp docker/docker-compose.override.example.yml docker/docker-compose.override.yml
+#   # Edit docker/docker-compose.override.yml with your real host paths
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.override.yml up -d
+#
+# This file uses PLACEHOLDER paths. Required volume mounts:
+#   1. /config    -> Libation config (AccountsSettings.json, Settings.json)
+#   2. /data      -> Libation books source directory
+#   3. <each library destination_dir in libraries.yaml>
+#   4. ../abs-mcp/libraries.yaml (read-only) — runtime config from HOST
+#   5. ../abs-mcp/.env (read-only) — runtime env vars (ABS URL, token, etc.) from HOST
+#
+# NFS mounts must be established on the host BEFORE the container starts.
+# The container is library-agnostic — it reads libraries.yaml at runtime.
+#
+# SECURITY: The image does NOT contain any credentials, library UUIDs, or
+# environment files. You MUST mount your own .env and libraries.yaml from
+# the host. See abs-mcp/README.md "Docker Deployment" section for setup.
+
+services:
+  audiobook-ingestion-mcp:
+    image: ghcr.io/stratus-ss/mcps/audiobook-ingestion-mcp:latest
+    container_name: audiobook-ingestion-mcp
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      MCP_ENV_FILE: /app/abs-mcp/.env
+      LIBATION_CLI: /libation/LibationCli
+    volumes:
+      # 1. Libation config (AccountsSettings.json, Settings.json)
+      - /path/to/libation/config:/config
+
+      # 2. Libation books source directory
+      - /path/to/libation/books:/data
+
+      # 3. Book library destination mounts.
+      # Add one entry per destination_dir in libraries.yaml for media_type: book.
+      # The MCP server resolves destination_dir per library at tool-call time —
+      # these paths must match what's in libraries.yaml.
+      # - /host/path/to/kids/audiobooks:/path/to/kids/audiobooks
+      # - /host/path/to/adult/audiobooks:/path/to/adult/audiobooks
+
+      # 4. Podcast library destination mounts.
+      # Required for media_type: podcast libraries that use manual file downloads.
+      # - /host/path/to/kids/podcasts:/path/to/kids/podcasts
+      # - /host/path/to/adult/podcasts:/path/to/adult/podcasts
+
+      # 5. Runtime config (read-only) — paths are relative to REPO ROOT
+      # because docker-compose is invoked from there with `-f docker/docker-compose.yml`.
+      - ../abs-mcp/libraries.yaml:/app/abs-mcp/libraries.yaml:ro
+      - ../abs-mcp/.env:/app/abs-mcp/.env:ro

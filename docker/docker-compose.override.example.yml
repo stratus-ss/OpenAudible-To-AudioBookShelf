@@ -1,0 +1,30 @@
+# docker-compose.override.example.yml
+#
+# Use this file as a reference for local development. Docker Compose merges
+# this file on top of docker-compose.yml.
+#
+# Run from the REPO ROOT:
+#   1. cp docker/docker-compose.override.example.yml docker/docker-compose.override.yml
+#   2. Edit docker/docker-compose.override.yml to match your real host layout
+#   3. docker compose -f docker/docker-compose.yml -f docker/docker-compose.override.yml up -d
+#
+# The placeholder paths in docker-compose.yml will be overridden by these.
+
+services:
+  audiobook-ingestion-mcp:
+    volumes:
+      # Real Libation config path on your host
+      - /opt/libation/config:/config
+
+      # Real Libation books source on your host
+      - /opt/libation/books:/data
+
+      # Real destination paths for each library in libraries.yaml
+      - /srv/abs/kids/audiobooks:/path/to/kids/audiobooks
+      - /srv/abs/adult/audiobooks:/path/to/adult/audiobooks
+      - /srv/abs/kids/podcasts:/path/to/kids/podcasts
+      - /srv/abs/adult/podcasts:/path/to/adult/podcasts
+
+      # Runtime config (read-only) — paths relative to REPO ROOT
+      - ../abs-mcp/libraries.yaml:/app/abs-mcp/libraries.yaml:ro
+      - ../abs-mcp/.env:/app/abs-mcp/.env:ro

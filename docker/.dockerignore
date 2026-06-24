@@ -1,0 +1,56 @@
+# Build artifacts
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Version control
+.git/
+.gitignore
+.gitignore.bak
+
+# Local credentials -- NEVER bake into the image.
+# .env and libraries.yaml are mounted at runtime via docker-compose.
+api_key.txt
+.env
+.env.*
+.env.test
+.env.local
+.env.production
+!.env.example
+
+# YAML configs -- only the SAFE examples ship with the image.
+# libraries.yaml contains real ABS library UUIDs + destination paths.
+# libraries.test.yaml contains a test ABS token + library ID.
+# Both MUST be mounted at runtime, never baked in.
+*.yaml
+*.yml
+!abs-mcp/libraries.example.yaml
+!abs-mcp/libraries.yaml.example
+!arguments.yaml
+!abs-mcp/test_arguments.yaml
+
+# Runtime / state data
+backups/
+devlogs/
+libation.json
+FileLocationsV2.json
+book_processing.txt
+book_tree.out
+swear_list.json
+
+# Planning / docs not needed in the image
+agent_planning/
+zed_plans/
+docs/
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Local compose overrides (keep the committed example)
+docker-compose.override.yml

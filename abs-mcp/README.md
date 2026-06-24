@@ -8,6 +8,23 @@ Supports Streamable HTTP (default at `/mcp`, configurable via `MCP_STREAMABLE_PA
 
 ---
 
+## Choose Your Path
+
+There are two equivalent ways to run this MCP server. Pick the one that matches your environment:
+
+| Path | Prerequisites | Setup time | Best for |
+|------|---------------|------------|----------|
+| **Container (Docker / Compose)** | Docker 20.10+, Docker Compose v2, your existing Libation config + books + ABS audiobooks directory on the host | ~10 min | New deploys, multiple libraries (kids/adult/podcasts), no host pollution, reproducible |
+| **Python + venv + systemd** (bare-metal) | Python 3.12+, Libation installed natively (Arch AUR or GitHub release), NFS mounts configured | ~30 min | Existing systemd-managed host with Libation already installed, debugging Python directly |
+
+**The container image bundles Libation + .NET runtime + Python + MCP server together** -- you don't need to install anything on the host beyond Docker itself. Both paths read the same `.env` and `libraries.yaml` files.
+
+**For container:** skip Part 1 entirely and go to [Step 5c: Docker Deployment](#step-5c-docker-deployment-alternative) below. Then [Step 7](#step-7-connect-your-ai-client) for IDE integration. Steps 1-6 are for the bare-metal path.
+
+**For bare-metal:** continue with Part 1 below.
+
+---
+
 ## Part 1: Human Setup Guide
 
 Everything you need to install, configure, and run the MCP server from scratch.
@@ -139,7 +156,76 @@ LIBRARIES_CONFIG=abs-mcp/libraries.yaml
 
 Tools then accept a `library` parameter (e.g. `library="kids"`) instead of raw UUIDs.
 
-### Step 6: Start the Server
+### Step 5c: Docker Deployment (Alternative)
+
+Instead of running on bare metal with systemd, you can run the MCP server as a container. The image bundles Libation (CLI binary, .NET runtime, account decryption) and the MCP server together — no need to install Libation on the host.
+
+**Pull the image:**
+
+```bash
+docker pull ghcr.io/stratus-ss/mcps/audiobook-ingestion-mcp:latest
+```
+
+**Required volume mounts:**
+
+1. **Libation config** — your existing `AccountsSettings.json`, `Settings.json`, `LibationContext.db` directory.
+2. **Libation books source** — your existing downloaded audiobooks directory.
+3. **Per-library destination** — one mount per `destination_dir` entry in your `libraries.yaml`. The MCP server resolves `destination_dir` per library at tool-call time, so these paths must match what's in your `libraries.yaml`. Typical setups mount an NFS share that ABS also reads.
+4. **`libraries.yaml` (read-only)** — your multi-library config from the host.
+5. **`.env` (read-only)** — your ABS API token and connection settings from the host.
+
+> **Important:** The image contains **no credentials, library UUIDs, or environment files**. You MUST mount your own `.env` and `libraries.yaml` from the host. The image ships `.env.example` and `libraries.example.yaml` as templates — `cp` them outside the container to create your editable copies.
+
+**NFS note:** If your ABS audiobooks directory is on a remote server, establish the NFS mount on the host **before** starting the container. Mounts inside the container must resolve to paths the host already has mounted.
+
+**Run with `docker run`:**
+
+```bash
+# Run from the REPO ROOT (so relative paths to ./abs-mcp/ resolve correctly)
+cd /path/to/Import-To-AudioBookShelf
+docker run -d --name audiobook-ingestion-mcp \
+  --restart unless-stopped \
+  -p 8765:8765 \
+  -e LIBATION_CLI=/libation/LibationCli \
+  -e LIBATION_FILES_DIR=/config \
+  -e MCP_ENV_FILE=/app/abs-mcp/.env \
+  -v /path/to/libation/config:/config \
+  -v /path/to/libation/books:/data \
+  -v /path/to/kids/audiobooks:/path/to/kids/audiobooks \
+  -v /path/to/adult/audiobooks:/path/to/adult/audiobooks \
+  -v ./abs-mcp/libraries.yaml:/app/abs-mcp/libraries.yaml:ro \
+  -v ./abs-mcp/.env:/app/abs-mcp/.env:ro \
+  ghcr.io/stratus-ss/mcps/audiobook-ingestion-mcp:latest
+```
+
+Add one `-v /host/path:/container/path` line per library `destination_dir` in your `libraries.yaml`. Podcast libraries with `media_type: podcast` also need their destination directory mounted.
+
+**Run with `docker-compose` (recommended):**
+
+All container artifacts live in the `docker/` directory: `Dockerfile`, `docker-compose.yml`, `docker-compose.override.example.yml`, and `scripts/regen-egg-info.sh`. Run from the REPO ROOT:
+
+```bash
+cd /path/to/Import-To-AudioBookShelf
+# Quick start (uses placeholder paths — won't work until you create an override):
+docker compose -f docker/docker-compose.yml up -d
+
+# Real deploy (recommended): copy and edit the override, then run with both files
+cp docker/docker-compose.override.example.yml docker/docker-compose.override.yml
+# Edit docker/docker-compose.override.yml to use your real host paths
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.override.yml up -d
+```
+
+The base `docker/docker-compose.yml` is committed with placeholders; `docker/docker-compose.override.yml` is gitignored so your real paths stay local.
+
+**Files referenced (all under `docker/`):**
+
+- `docker/Dockerfile` — multi-stage image build definition
+- `docker/.dockerignore` — excludes secrets and build artifacts from the build context
+- `docker/docker-compose.yml` — placeholder mount pattern, committed to git
+- `docker/docker-compose.override.example.yml` — real-path override template
+- `docker/scripts/regen-egg-info.sh` — runtime helper for the local package's dist-info
+
+### Step 6: Start the Server (Bare Metal)
 
 **Streamable HTTP mode (remote/network access -- default):**
 
@@ -255,6 +341,22 @@ journalctl -u audiobook-ingestion-mcp -f
 ```
 
 > **Note:** The MCP server must run on the host where `libationcli` is installed and the ABS audiobooks directory is writable (directly or via NFS). For remote setups, start the server on that host in Streamable HTTP mode and connect from your AI client via URL.
+
+#### Docker (persistent container)
+
+If you deployed the container per Step 5c, connect your AI client to the containerized server the same way you'd connect to a bare-metal Streamable HTTP server — point at the host where the container's port 8765 is published:
+
+```json
+{
+  "mcpServers": {
+    "audiobook-ingestion": {
+      "url": "http://your-host:8765/mcp"
+    }
+  }
+}
+```
+
+The container listens on `/mcp` (default Streamable HTTP path) regardless of host platform. Mounts and environment come from `docker/docker-compose.yml` / `docker/docker-compose.override.yml` — no client-side env vars needed.
 
 ### Testing
 
