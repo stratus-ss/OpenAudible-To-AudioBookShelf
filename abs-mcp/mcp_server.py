@@ -945,8 +945,16 @@ def delete_library_items(
 
     Args:
         item_ids: Specific ABS library item IDs to delete.
-        delete_all: If True, delete every item in the library (use with caution).
-        cleanup_files: Also remove audio files from the destination and source directories.
+        delete_all: If True, delete every book in the library (use with caution).
+        cleanup_files: Also remove audio files from the destination and source
+            directories. **Strongly recommended to set True.** Defaults to False,
+            in which case only the ABS DB row is removed; the `.m4b` file remains
+            in the destination directory, and ABS's file-system watcher
+            (`disableWatcher=false` on both libraries) auto-rescans within ~5
+            seconds and re-imports the orphan under a fresh UUID. The tool still
+            returns ``success=true, deleted=1`` after a DB-only delete, so the
+            resurrection is invisible at the MCP boundary and only surfaces when
+            the user reopens the ABS UI.
         library: Library name from libraries.yaml (e.g. 'kids', 'adult').
         source_dir: Libation source directory to clean (default: from .env).
         abs_server_url: Override ABS server URL.
