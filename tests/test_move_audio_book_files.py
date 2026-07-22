@@ -1,9 +1,13 @@
 import importlib.util
+import io
 import json
 import os
 import sys
+import tempfile
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -15,6 +19,8 @@ from openaudible_to_audiobookshelf.pipeline import (
     step_organize,
 )
 from openaudible_to_audiobookshelf.utils import sanitize_name
+
+_REAL_OS_PATH_EXISTS = os.path.exists
 
 
 # ---------------------------------------------------------------------------
@@ -659,7 +665,7 @@ class TestProfanityCleaningValidation:
         """cleaning=True, URL set, swears_file="", monkeyplug exists but swears.txt missing → ValueError."""
         mcp = _MCP_SERVER
         monkeypatch.delenv("REMOTE_WHISPER_URL", raising=False)
-        monkeypatch.setattr("os.path.exists", lambda p: False if p.endswith("swears.txt") else os.path.exists(p))
+        monkeypatch.setattr("os.path.exists", lambda p: False if str(p).endswith("swears.txt") else _REAL_OS_PATH_EXISTS(str(p)))
         cfg = Config()
         cfg.enable_profanity_cleaning = True
         cfg.remote_whisper_url = "http://whisper.example:8000"
@@ -756,5 +762,276 @@ class TestProfanityCleaningValidation:
         assert result.get("step") == "organize"
         assert "REMOTE_WHISPER_URL" in result.get("error", ""), (
             f"error message should name REMOTE_WHISPER_URL; got {result.get('error')!r}"
+        )
+
+
+class TestProfanityCleaningUx:
+    """Tests for the 5 new behaviors added by the profanity_cleaning_ux plan:
+
+    - fail-fast backend check (audio_cleaner.py 1c)
+    - book-level resume state (audio_cleaner.py 1b)
+    - progress callback plumbing (audio_cleaner.py + mcp_server.py 2b)
+    - cleaning stats in tool response (pipeline.py 2c)
+    - get_cleaning_progress MCP tool (mcp_server.py 2d)
+    - duration hint in tool docstring (mcp_server.py 2a)
+    """
+
+    def setup_method(self):
+        # Defensive cleanup of the shared /tmp resume file (some test classes
+        # use /tmp/<random> working dirs which all share one resume path).
+        shared_resume = "/tmp/profanity_cleaning_resume.json"
+        if os.path.exists(shared_resume):
+            os.remove(shared_resume)
+
+    def _make_config(self, tmp_path, *, remote_whisper_url, swears_file):
+        """Build a Config suitable for instantiating AudioCleaner in tests."""
+        cfg = Config()
+        cfg.working_directory = str(tmp_path / "working")
+        cfg.save_transcripts = False
+        cfg.enable_profanity_cleaning = True
+        cfg.remote_whisper_url = remote_whisper_url
+        cfg.swears_file = swears_file
+        cfg.timeout = 60
+        cfg.beep_mode = False
+        cfg.confidence_threshold = 0.7
+        cfg.copy_instead_of_move = False
+        return cfg
+
+    def _write_swears(self):
+        path = "/tmp/test_swears_ux.txt"
+        Path(path).write_text("anal\n")
+        return path
+
+    def test_fail_fast_backend_unreachable(self, tmp_path):
+        """AudioCleaner with unreachable Whisper URL raises AudioCleaningError in <10s.
+
+        Verifies Task 1c: fail-fast backend check raises AudioCleaningError,
+        the existing except handler returns the source file, total_failed is incremented.
+        """
+        from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner
+
+        swears = self._write_swears()
+        try:
+            cfg = self._make_config(
+                tmp_path, remote_whisper_url="http://localhost:1", swears_file=swears
+            )
+            cleaner = AudioCleaner(cfg, io.StringIO())
+            with tempfile.NamedTemporaryFile(suffix=".m4b", delete=False) as f:
+                f.write(b"fakedata")
+                src = f.name
+            try:
+                start = time.monotonic()
+                result = cleaner.process_audio_file(
+                    src, {"title": "Fail Book", "asin": "B0FAIL"}
+                )
+                elapsed = time.monotonic() - start
+            finally:
+                os.remove(src)
+
+            assert result == src, "should fall back to source file on backend down"
+            assert elapsed < 10, f"should fail fast (<10s); took {elapsed:.2f}s"
+            assert cleaner.total_failed == 1
+            assert cleaner.total_processed == 0
+        finally:
+            if os.path.exists(swears):
+                os.remove(swears)
+
+    def test_resume_state_written_on_success(self, tmp_path):
+        """After successful process_audio_file, resume JSON marks ASIN 'done'.
+
+        Verifies Task 1b: _mark_resume_status writes 'done' on success.
+        """
+        from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner
+
+        swears = self._write_swears()
+        try:
+            cfg = self._make_config(
+                tmp_path, remote_whisper_url="http://whisper:8000", swears_file=swears
+            )
+            cleaner = AudioCleaner(cfg, io.StringIO())
+
+            src = str(tmp_path / "src.m4b")
+            Path(src).write_bytes(b"fakedata")
+            # Pre-create the output file that the mocked WhisperPlugger will return.
+            out_dir = tmp_path / "working" / "B0DONE"
+            out_dir.mkdir(parents=True)
+            out = out_dir / "src.m4b"
+            out.write_bytes(b"cleaned output")
+
+            with patch(
+                "openaudible_to_audiobookshelf.audio_cleaner.requests.head"
+            ) as rh:
+                rh.return_value.raise_for_status.return_value = None
+                with patch(
+                    "openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger"
+                ) as mpc:
+                    mock_plugger = MagicMock()
+                    mock_plugger.EncodeCleanAudio.return_value = str(out)
+                    mock_plugger.naughtyWordList = []
+                    mpc.return_value = mock_plugger
+
+                    result = cleaner.process_audio_file(
+                        src, {"title": "Done Book", "asin": "B0DONE"}
+                    )
+
+            assert result == str(out)
+            assert cleaner.total_processed == 1
+
+            resume_path = tmp_path / "profanity_cleaning_resume.json"
+            assert resume_path.exists(), (
+                f"resume JSON not written; expected at {resume_path}"
+            )
+            state = json.loads(resume_path.read_text())
+            assert state.get("B0DONE") == "done", (
+                f"expected B0DONE='done' in resume state; got {state}"
+            )
+        finally:
+            if os.path.exists(swears):
+                os.remove(swears)
+
+    def test_resume_state_written_on_failure(self, tmp_path):
+        """After failed process_audio_file, resume JSON marks ASIN 'failed'.
+
+        Verifies Task 1b: _mark_resume_status writes 'failed' in the except handler.
+        """
+        from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner
+
+        swears = self._write_swears()
+        try:
+            cfg = self._make_config(
+                tmp_path, remote_whisper_url="http://localhost:1", swears_file=swears
+            )
+            cleaner = AudioCleaner(cfg, io.StringIO())
+            with tempfile.NamedTemporaryFile(suffix=".m4b", delete=False) as f:
+                f.write(b"fakedata")
+                src = f.name
+            try:
+                result = cleaner.process_audio_file(
+                    src, {"title": "Failing Book", "asin": "B0FAIL2"}
+                )
+            finally:
+                os.remove(src)
+
+            assert result == src
+            assert cleaner.total_failed == 1
+
+            resume_path = tmp_path / "profanity_cleaning_resume.json"
+            assert resume_path.exists(), (
+                f"resume JSON not written; expected at {resume_path}"
+            )
+            state = json.loads(resume_path.read_text())
+            assert state.get("B0FAIL2") == "failed", (
+                f"expected B0FAIL2='failed' in resume state; got {state}"
+            )
+        finally:
+            if os.path.exists(swears):
+                os.remove(swears)
+
+    def test_resume_state_skips_processed(self, tmp_path):
+        """Pre-populated 'done' ASIN short-circuits process_audio_file.
+
+        Verifies Task 1b: _is_already_processed causes an immediate return
+        before any HTTP / plugger call is made.
+        """
+        from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner
+
+        swears = self._write_swears()
+        try:
+            # Pre-populate the resume JSON that lives at <working_dir>.parent/_RESUME_FILE.
+            resume_path = tmp_path / "profanity_cleaning_resume.json"
+            resume_path.write_text(json.dumps({"B0SKIP": "done"}))
+
+            cfg = self._make_config(
+                tmp_path, remote_whisper_url="http://localhost:1", swears_file=swears
+            )
+            cleaner = AudioCleaner(cfg, io.StringIO())
+            assert cleaner._is_already_processed("B0SKIP") is True
+
+            with tempfile.NamedTemporaryFile(suffix=".m4b", delete=False) as f:
+                f.write(b"fakedata")
+                src = f.name
+            try:
+                with patch(
+                    "openaudible_to_audiobookshelf.audio_cleaner.requests.head"
+                ) as rh:
+                    result = cleaner.process_audio_file(
+                        src, {"title": "Skip Book", "asin": "B0SKIP"}
+                    )
+                    rh.assert_not_called()
+            finally:
+                os.remove(src)
+
+            assert result == src, "should return source immediately on resume skip"
+            assert cleaner.total_processed == 0
+            assert cleaner.total_failed == 0
+            # State should still be 'done' (not overwritten)
+            state = json.loads(resume_path.read_text())
+            assert state.get("B0SKIP") == "done"
+        finally:
+            if os.path.exists(swears):
+                os.remove(swears)
+
+    def test_cleaning_stats_in_response(self, tmp_path):
+        """step_organize returns a 'cleaning' key with the expected fields.
+
+        Verifies Task 2c: pipeline.py adds the cleaning stats key to the return dict.
+        """
+        cfg = self._make_config(
+            tmp_path, remote_whisper_url="http://whisper:8000", swears_file=self._write_swears()
+        )
+        cfg.books_json_path = str(tmp_path / "libation.json")
+        cfg.source_audio_book_directory = str(tmp_path / "src")
+        cfg.destination_book_directory = str(tmp_path / "dest")
+        cfg.audio_file_extension = ".m4b"
+        cfg.libation_file_locations_path = ""
+        cfg.purchased_how_long_ago = 0
+        cfg.download_program = "Libation"
+        Path(cfg.books_json_path).write_text("[]")
+        Path(cfg.source_audio_book_directory).mkdir()
+        Path(cfg.destination_book_directory).mkdir()
+
+        try:
+            with patch(
+                "openaudible_to_audiobookshelf.audio_cleaner.requests.head"
+            ) as rh:
+                rh.return_value.raise_for_status.return_value = None
+                result = step_organize(cfg)
+        finally:
+            if os.path.exists(cfg.swears_file):
+                os.remove(cfg.swears_file)
+
+        assert "cleaning" in result, f"Expected 'cleaning' key in result: {result}"
+        cleaning = result["cleaning"]
+        assert "total_cleaned" in cleaning, f"missing total_cleaned: {cleaning}"
+        assert "total_failed" in cleaning, f"missing total_failed: {cleaning}"
+        assert "total_profanities" in cleaning, f"missing total_profanities: {cleaning}"
+
+    def test_get_cleaning_progress_tool_returns_json(self):
+        """get_cleaning_progress returns valid JSON dict.
+
+        Verifies Task 2d: the new MCP tool is registered and returns JSON.
+        """
+        if _MCP_SERVER is None:
+            pytest.skip("mcp_server module not loadable in this environment")
+        result_json = _MCP_SERVER.get_cleaning_progress()
+        result = json.loads(result_json)
+        assert isinstance(result, dict), f"Expected dict, got {type(result).__name__}"
+
+    def test_duration_hint_in_docstring(self):
+        """organize_books.__doc__ contains the expected duration hint.
+
+        Verifies Task 2a: duration hint added to tool docstring.
+        """
+        if _MCP_SERVER is None:
+            pytest.skip("mcp_server module not loadable in this environment")
+        doc = _MCP_SERVER.organize_books.__doc__ or ""
+        assert "~2-5 min per hour" in doc, (
+            f"organize_books docstring missing duration hint:\n{doc}"
+        )
+        assert "get_cleaning_progress()" in doc, (
+            "organize_books docstring missing get_cleaning_progress reference"
+        )
+        assert "150MB" in doc, (
+            "organize_books docstring missing chunking size reference"
         )
 

@@ -24,9 +24,26 @@ from pathlib import Path
 
 import feedparser
 import requests
+import threading
 import yaml
 
 ABS_MCP_DIR = Path(__file__).resolve().parent
+
+_cleaning_progress: dict = {}
+_CLEANING_PROGRESS_LOCK = threading.Lock()
+
+
+def _update_cleaning_progress(**kwargs) -> None:
+    """Module-level progress callback used by AudioCleaner via cfg._progress_callback."""
+    with _CLEANING_PROGRESS_LOCK:
+        _cleaning_progress.update(kwargs)
+        _cleaning_progress["_updated_at"] = time.time()
+
+
+def _reset_cleaning_progress() -> None:
+    """Clear any prior run's progress before starting a new organize/ingest operation."""
+    with _CLEANING_PROGRESS_LOCK:
+        _cleaning_progress.clear()
 
 
 def _load_dotenv(env_file: Path) -> None:
@@ -503,6 +520,7 @@ def _build_config(
     cfg.confidence_threshold = float(_env("CONFIDENCE_THRESHOLD", "0.70"))
     cfg.beep_mode = _env("BEEP_MODE", "false").lower() == "true"
     _validate_profanity_config(cfg)
+    cfg._progress_callback = _update_cleaning_progress
     return cfg
 
 
@@ -849,6 +867,12 @@ def organize_books(
         libation_folder_cleanup: Delete Libation source folders after move (default: from .env).
         libation_file_locations_path: Path to Libation FileLocationsV2.json (default: from .env).
         enable_profanity_cleaning: Enable monkeyplug profanity filtering (default: from .env).
+
+        Note: When enable_profanity_cleaning=True, expect ~2-5 min per hour
+        of audio content, heavily dependent on Whisper backend load.
+        Audio files >150MB are split into ~145MB chunks and processed
+        sequentially. Use get_cleaning_progress() to poll progress
+        mid-operation.
     """
     _tool_start = time.monotonic()
     user_specified_ext = audio_file_extension is not None
@@ -872,6 +896,8 @@ def organize_books(
             json.dumps({"step": "organize", "success": False, "error": str(e)}),
             success=False,
         )
+
+    _reset_cleaning_progress()
 
     if not user_specified_ext:
         detected = _detect_audio_extension(Path(cfg.source_audio_book_directory))
@@ -1215,6 +1241,12 @@ def ingest_books(
         abs_server_url: ABS server URL (default: from .env or library config).
         abs_library_id: ABS library UUID (default: from .env or library config).
         abs_api_token: ABS API bearer token (default: from .env or library config).
+
+        Note: When enable_profanity_cleaning=True, expect ~2-5 min per hour
+        of audio content, heavily dependent on Whisper backend load.
+        Audio files >150MB are split into ~145MB chunks and processed
+        sequentially. Use get_cleaning_progress() to poll progress
+        mid-operation.
     """
     _tool_start = time.monotonic()
     try:
@@ -1241,6 +1273,8 @@ def ingest_books(
             json.dumps({"success": False, "error": str(e)}),
             success=False,
         )
+
+    _reset_cleaning_progress()
     results = {}
 
     LOGGER.info("Step 1/6: Scanning Audible library")
@@ -2175,6 +2209,23 @@ def download_podcast_files(
         ),
         success=len(errors) == 0,
     )
+
+
+@mcp.tool()
+def get_cleaning_progress() -> str:
+    """Get current profanity cleaning progress.
+
+    Poll this mid-operation to check per-book status when
+    enable_profanity_cleaning=True. Returns JSON with per-ASIN
+    progress and aggregate stats.
+
+    Returns empty progress if no cleaning operation is active or
+    if the last operation completed without a progress callback.
+    """
+    with _CLEANING_PROGRESS_LOCK:
+        snapshot = dict(_cleaning_progress)
+    snapshot.pop("_updated_at", None)
+    return json.dumps(snapshot, default=str)
 
 
 if __name__ == "__main__":

@@ -413,6 +413,14 @@ def step_organize(
         audio_cleaner.log_statistics()
         audio_cleaner.cleanup_working_directory()
 
+    cleaning_stats: dict = {}
+    if audio_cleaner:
+        cleaning_stats = {
+            "total_cleaned": audio_cleaner.total_processed,
+            "total_failed": audio_cleaner.total_failed,
+            "total_profanities": audio_cleaner.total_profanities,
+        }
+
     moved = [b.get("title", "Unknown") for b in processed]
     log_content = log_file.getvalue() if isinstance(log_file, io.StringIO) else ""
     return {
@@ -425,6 +433,7 @@ def step_organize(
         "total_in_source": tracking.get("total", 0),
         "applied_asins": tracking.get("applied_asins") or [],
         "destination_dir": config.destination_book_directory,
+        "cleaning": cleaning_stats,
         "log": log_content,
         "_book_list": processed,
     }

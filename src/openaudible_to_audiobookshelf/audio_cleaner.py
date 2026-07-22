@@ -5,14 +5,25 @@ This module provides the AudioCleaner class which integrates MonkeyPlug
 profanity cleaning into the OpenAudible-To-AudioBookShelf pipeline.
 """
 
+import json
+import logging
 import os
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import requests
 from monkeyplug.monkeyplug import WhisperPlugger
 from openaudible_to_audiobookshelf.utils import sanitize_name, log_message
+
+_LOG_LEVEL_MAP = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
 
 
 class AudioCleaningError(Exception):
@@ -24,6 +35,7 @@ class AudioCleaner:
     """Manages profanity cleaning of audio files using MonkeyPlug."""
     
     CHUNKING_THRESHOLD_MB = 150  # File size threshold for chunked processing
+    _RESUME_FILE = "profanity_cleaning_resume.json"
 
     def __init__(self, config, log_file):
         """
@@ -39,18 +51,56 @@ class AudioCleaner:
         self.working_dir.mkdir(parents=True, exist_ok=True)
         self.copy_mode = getattr(config, "copy_instead_of_move", False)
 
+        self._logger = logging.getLogger(__name__)
+
+        self._progress_callback = getattr(self.config, "_progress_callback", None)
+
+        self.resume_path = Path(self.working_dir.parent) / self._RESUME_FILE
+        self._resume_state: dict = {}
+        if self.resume_path.exists():
+            try:
+                self._resume_state = json.loads(self.resume_path.read_text())
+            except (json.JSONDecodeError, OSError) as e:
+                self._log(f"Could not load resume state from {self.resume_path}: {e}", "WARNING")
+                self._resume_state = {}
+
         # Track statistics
         self.total_processed = 0
         self.total_failed = 0
         self.total_profanities = 0
+        self._last_profanity_count = 0
 
     # ============================================================================
     # UTILITY HELPERS
     # ============================================================================
 
+    def _is_already_processed(self, asin: str) -> bool:
+        """Return True if ASIN is in the resume state and marked as done."""
+        return bool(asin) and self._resume_state.get(asin) == "done"
+
+    def _mark_resume_status(self, asin: str, status: str) -> None:
+        """Persist ASIN -> status into the resume JSON file."""
+        if not asin:
+            return
+        self._resume_state[asin] = status
+        try:
+            self.resume_path.parent.mkdir(parents=True, exist_ok=True)
+            self.resume_path.write_text(json.dumps(self._resume_state, indent=2))
+        except OSError as e:
+            self._log(f"Failed to write resume state to {self.resume_path}: {e}", "WARNING")
+
+    def _fire_progress(self, **data) -> None:
+        """Forward progress events to the configured callback (if any)."""
+        if self._progress_callback:
+            try:
+                self._progress_callback(**data)
+            except Exception as e:  # never let progress reporting break processing
+                self._log(f"Progress callback failed: {e}", "WARNING")
+
     def _log(self, message: str, level: str = "INFO"):
         """Write a log message using centralized logging utility."""
         log_message(self.log_file, message, level)
+        self._logger.log(_LOG_LEVEL_MAP.get(level, logging.INFO), message)
 
     # ============================================================================
     # MAIN PUBLIC METHODS
@@ -72,8 +122,26 @@ class AudioCleaner:
         """
         try:
             book_title = book_data.get("title", "Unknown Title")
+            asin = book_data.get("asin", "")
+            if asin and self._is_already_processed(asin):
+                self._log_start_header(book_title)
+                self._log(f"Skipping — ASIN {asin} already processed (resume state)")
+                self._fire_progress(asin=asin, book_title=book_title, status="skipped")
+                return source_file
+
+            self._fire_progress(asin=asin, book_title=book_title, status="processing")
             self._log_start_header(book_title)
-            
+
+            if self.config.remote_whisper_url:
+                try:
+                    h = requests.head(self.config.remote_whisper_url, timeout=5)
+                    h.raise_for_status()
+                except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as e:
+                    raise AudioCleaningError(
+                        f"Whisper backend at {self.config.remote_whisper_url} is unreachable: {e}"
+                    )
+            self._fire_progress(asin=asin, book_title=book_title, status="transcribing")
+
             paths = self._setup_output_paths(source_file, book_data)
             self._log_configuration(source_file, paths)
             
@@ -109,12 +177,23 @@ class AudioCleaner:
                 raise AudioCleaningError(f"Output file is empty: {cleaned_file}")
 
             self.total_processed += 1
+            self._mark_resume_status(asin, "done")
+            self._fire_progress(
+                asin=asin, book_title=book_title, status="done",
+                profanities=self.total_profanities - getattr(self, "_last_profanity_count", 0),
+            )
+            self._last_profanity_count = self.total_profanities
             return cleaned_file
         except Exception as e:
             self.total_failed += 1
             title = book_data.get("title", "Unknown")
+            asin_fail = book_data.get("asin", "")
             self._log(f"Processing failed for {title}: {e}", "ERROR")
             self._log("Using original file")
+            self._mark_resume_status(asin_fail, "failed")
+            self._fire_progress(
+                asin=asin_fail, book_title=title, status="failed", error=str(e)
+            )
             return source_file
 
     def cleanup_working_directory(self, keep_transcripts: bool = None):
