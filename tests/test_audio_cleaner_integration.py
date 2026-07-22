@@ -244,11 +244,12 @@ class TestProcessAudioFile:
         if os.path.exists(resume):
             os.remove(resume)
 
-    @patch('openaudible_to_audiobookshelf.audio_cleaner.requests.head')
+    @patch('openaudible_to_audiobookshelf.audio_cleaner.socket.create_connection')
     @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
-    def test_uses_chunker_for_large_files(self, mock_plugger_class, mock_requests_head, base_config, mock_log_file):
+    def test_uses_chunker_for_large_files(self, mock_plugger_class, mock_create_connection, base_config, mock_log_file):
         """Test that AudioChunker is used for large files."""
-        mock_requests_head.return_value.raise_for_status.return_value = None
+        mock_create_connection.return_value.__enter__ = lambda self: self
+        mock_create_connection.return_value.__exit__ = lambda self, *args: None
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a large test file (>150MB)
             source_file = os.path.join(tmpdir, "large.m4b")
@@ -280,11 +281,12 @@ class TestProcessAudioFile:
             assert result == output_file
             assert cleaner.total_processed == 1
 
-    @patch('openaudible_to_audiobookshelf.audio_cleaner.requests.head')
+    @patch('openaudible_to_audiobookshelf.audio_cleaner.socket.create_connection')
     @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
-    def test_uses_direct_encoding_for_small_files(self, mock_plugger_class, mock_requests_head, base_config, mock_log_file):
+    def test_uses_direct_encoding_for_small_files(self, mock_plugger_class, mock_create_connection, base_config, mock_log_file):
         """Test that direct encoding is used for small files."""
-        mock_requests_head.return_value.raise_for_status.return_value = None
+        mock_create_connection.return_value.__enter__ = lambda self: self
+        mock_create_connection.return_value.__exit__ = lambda self, *args: None
         with tempfile.TemporaryDirectory() as tmpdir:
             # Create a small test file (<150MB)
             source_file = os.path.join(tmpdir, "small.m4b")
@@ -320,11 +322,12 @@ class TestProcessAudioFile:
             assert cleaner.total_processed == 1
             assert cleaner.total_profanities == 2  # len(naughtyWordList)
 
-    @patch('openaudible_to_audiobookshelf.audio_cleaner.requests.head')
+    @patch('openaudible_to_audiobookshelf.audio_cleaner.socket.create_connection')
     @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
-    def test_returns_original_file_on_error(self, mock_plugger_class, mock_requests_head, base_config, mock_log_file):
+    def test_returns_original_file_on_error(self, mock_plugger_class, mock_create_connection, base_config, mock_log_file):
         """Test that original file is returned when processing fails."""
-        mock_requests_head.return_value.raise_for_status.return_value = None
+        mock_create_connection.return_value.__enter__ = lambda self: self
+        mock_create_connection.return_value.__exit__ = lambda self, *args: None
         with tempfile.TemporaryDirectory() as tmpdir:
             source_file = os.path.join(tmpdir, "test.m4b")
             with open(source_file, 'wb') as f:

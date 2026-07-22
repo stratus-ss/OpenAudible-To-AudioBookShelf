@@ -9,6 +9,8 @@ import json
 import logging
 import os
 import shutil
+import socket
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -134,9 +136,16 @@ class AudioCleaner:
 
             if self.config.remote_whisper_url:
                 try:
-                    h = requests.head(self.config.remote_whisper_url, timeout=5)
-                    h.raise_for_status()
-                except (requests.ConnectionError, requests.Timeout, requests.HTTPError) as e:
+                    parsed = urllib.parse.urlparse(self.config.remote_whisper_url)
+                    host = parsed.hostname
+                    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                    if not host:
+                        raise AudioCleaningError(
+                            f"Whisper backend URL has no host: {self.config.remote_whisper_url}"
+                        )
+                    with socket.create_connection((host, port), timeout=5):
+                        pass
+                except (OSError, AudioCleaningError) as e:
                     raise AudioCleaningError(
                         f"Whisper backend at {self.config.remote_whisper_url} is unreachable: {e}"
                     )

@@ -859,9 +859,10 @@ class TestProfanityCleaningUx:
             out.write_bytes(b"cleaned output")
 
             with patch(
-                "openaudible_to_audiobookshelf.audio_cleaner.requests.head"
-            ) as rh:
-                rh.return_value.raise_for_status.return_value = None
+                "openaudible_to_audiobookshelf.audio_cleaner.socket.create_connection"
+            ) as mock_create_connection:
+                mock_create_connection.return_value.__enter__ = lambda self: self
+                mock_create_connection.return_value.__exit__ = lambda self, *args: None
                 with patch(
                     "openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger"
                 ) as mpc:
@@ -952,12 +953,12 @@ class TestProfanityCleaningUx:
                 src = f.name
             try:
                 with patch(
-                    "openaudible_to_audiobookshelf.audio_cleaner.requests.head"
-                ) as rh:
+                    "openaudible_to_audiobookshelf.audio_cleaner.socket.create_connection"
+                ) as mock_create_connection:
                     result = cleaner.process_audio_file(
                         src, {"title": "Skip Book", "asin": "B0SKIP"}
                     )
-                    rh.assert_not_called()
+                    mock_create_connection.assert_not_called()
             finally:
                 os.remove(src)
 
@@ -992,9 +993,10 @@ class TestProfanityCleaningUx:
 
         try:
             with patch(
-                "openaudible_to_audiobookshelf.audio_cleaner.requests.head"
-            ) as rh:
-                rh.return_value.raise_for_status.return_value = None
+                "openaudible_to_audiobookshelf.audio_cleaner.socket.create_connection"
+            ) as mock_create_connection:
+                mock_create_connection.return_value.__enter__ = lambda self: self
+                mock_create_connection.return_value.__exit__ = lambda self, *args: None
                 result = step_organize(cfg)
         finally:
             if os.path.exists(cfg.swears_file):
