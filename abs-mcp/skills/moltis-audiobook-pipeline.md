@@ -19,6 +19,7 @@ allowed_tools:
   - mcp__audiobook-ingestion__get_source_status
   - mcp__audiobook-ingestion__get_tool_metrics
   - mcp__audiobook-ingestion__query_tool_metrics_history
+  - mcp__audiobook-ingestion__get_cleaning_progress
   - mcp__audiobook-ingestion__search_podcasts
   - mcp__audiobook-ingestion__add_podcast
   - mcp__audiobook-ingestion__list_podcasts
@@ -223,7 +224,7 @@ Download error? Retry once silently, report in summary if still failing.
 
 | Cost Tier | Tool(s) | Approx Tokens |
 |-----------|---------|---------------|
-| Free | `list_libraries`, `get_status`, `get_tool_metrics` | <500 |
+| Free | `list_libraries`, `get_status`, `get_tool_metrics`, `get_cleaning_progress` | <500 |
 | Cheap | `list_abs_library` (filtered), `search_abs_library` | <2k |
 | Medium | `scan_audible`, `export_library`, `scan_audiobookshelf`, `match_audiobookshelf` | 1-5k |
 | Expensive | `list_library` (Libation export) | 50k-150k |
@@ -243,6 +244,7 @@ Download error? Retry once silently, report in summary if still failing.
 | 6 | `organize_books` | `library="target"` | Move into Author/Series/Title tree. |
 | 7 | `scan_audiobookshelf` | `library="target"` | ABS discovers new files. ~20s. |
 | 8 | `match_audiobookshelf` | `library="target"`, `days_ago=1` | Link to Audible metadata. |
+| 8.5 | `get_cleaning_progress` | -- | Poll mid-operation for per-book profanity cleaning progress. Returns JSON with per-ASIN state (processing/transcribing/done/failed/skipped). Free to call. Use when `organize_books` or `ingest_books` is invoked with `enable_profanity_cleaning=true` and the operation takes more than 2 minutes. |
 | 9 | `delete_library_items` | `library=`, `item_ids=[...]`, **`cleanup_files=true`** | DB-only delete leaves the file on disk; ABS watcher (`disableWatcher=false`) resurrects the entry under a new UUID within seconds. |
 
 ## Troubleshooting
