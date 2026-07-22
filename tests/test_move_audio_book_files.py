@@ -600,3 +600,161 @@ def test_mcp_handoff_download_to_organize(monkeypatch, tmp_path):
     # Global should still be cleared after fallback path.
     assert mcp._last_downloaded_asins == []
     assert result2["step"] == "organize"
+
+
+# ---------------------------------------------------------------------------
+# Profanity-cleaning validation (gating `_build_config` against
+# `REMOTE_WHISPER_URL` correctness when `enable_profanity_cleaning=True`).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    _MCP_SERVER is None, reason="abs-mcp/mcp_server.py could not be imported"
+)
+class TestProfanityCleaningValidation:
+    """Pre-flight validation that rejects cleaning=true + REMOTE_WHISPER_URL="",
+    so AudioCleaner never silently falls back to the un-cleaned audio file.
+    """
+
+    def _stub_config(self, *, enable_profanity_cleaning, remote_whisper_url):
+        """Mimic the real `_build_config` shape minus env touches."""
+
+        def _factory(**_kwargs):
+            cfg = Config()
+            cfg.source_audio_book_directory = "/tmp/fake/source"
+            cfg.destination_book_directory = "/tmp/fake/dest"
+            cfg.audio_file_extension = ".m4b"
+            cfg.copy_instead_of_move = False
+            cfg.libation_folder_cleanup = False
+            cfg.download_program = "Libation"
+            cfg.purchased_how_long_ago = 0
+            cfg.libation_file_locations_path = ""
+            cfg.enable_profanity_cleaning = enable_profanity_cleaning
+            cfg.remote_whisper_url = remote_whisper_url
+            return cfg
+
+        return _factory
+
+    def test_validate_profanity_config_raises_without_whisper_url(self, monkeypatch):
+        """cleaning=True, URL="" → ValueError mentioning REMOTE_WHISPER_URL."""
+        mcp = _MCP_SERVER
+        monkeypatch.delenv("REMOTE_WHISPER_URL", raising=False)
+        cfg = Config()
+        cfg.enable_profanity_cleaning = True
+        cfg.remote_whisper_url = ""
+        with pytest.raises(ValueError, match="REMOTE_WHISPER_URL"):
+            mcp._validate_profanity_config(cfg)
+
+    def test_validate_profanity_config_passes_when_whisper_url_set(self, monkeypatch):
+        """cleaning=True, URL+s wears_file set → no exception."""
+        mcp = _MCP_SERVER
+        monkeypatch.delenv("REMOTE_WHISPER_URL", raising=False)
+        cfg = Config()
+        cfg.enable_profanity_cleaning = True
+        cfg.remote_whisper_url = "http://whisper.example:8000"
+        cfg.swears_file = "/fake/path/swears.txt"
+        mcp._validate_profanity_config(cfg)
+
+    def test_validate_profanity_config_raises_without_swears_file(self, monkeypatch):
+        """cleaning=True, URL set, swears_file="", monkeyplug exists but swears.txt missing → ValueError."""
+        mcp = _MCP_SERVER
+        monkeypatch.delenv("REMOTE_WHISPER_URL", raising=False)
+        monkeypatch.setattr("os.path.exists", lambda p: False if p.endswith("swears.txt") else os.path.exists(p))
+        cfg = Config()
+        cfg.enable_profanity_cleaning = True
+        cfg.remote_whisper_url = "http://whisper.example:8000"
+        cfg.swears_file = ""
+        with pytest.raises(ValueError, match="SWEARS_FILE"):
+            mcp._validate_profanity_config(cfg)
+
+    def test_validate_profanity_config_passes_when_cleaning_disabled(self, monkeypatch):
+        """cleaning=False regardless of URL → validation short-circuits, no exception."""
+        mcp = _MCP_SERVER
+        monkeypatch.delenv("REMOTE_WHISPER_URL", raising=False)
+        cfg = Config()
+        cfg.enable_profanity_cleaning = False
+        cfg.remote_whisper_url = ""
+        mcp._validate_profanity_config(cfg)
+
+    def test_build_config_raises_when_cleaning_enabled_without_url(self, monkeypatch, tmp_path):
+        """End-to-end: `_build_config` itself raises ValueError before returning.
+
+        This proves the in-line call (`_validate_profanity_config(cfg)`) is reached,
+        not just the helper when invoked directly.
+        """
+        mcp = _MCP_SERVER
+        monkeypatch.delenv("REMOTE_WHISPER_URL", raising=False)
+
+        def _stub_resolve_library(_library):
+            return {
+                "destination_dir": str(tmp_path),
+                "abs_server_url": "http://abs.example",
+                "library_id": "fake-lib-id",
+                "abs_api_token": "fake-token",
+            }
+
+        monkeypatch.setattr(mcp, "_resolve_library", _stub_resolve_library)
+
+        with pytest.raises(ValueError, match="REMOTE_WHISPER_URL"):
+            mcp._build_config(
+                library="kids",
+                enable_profanity_cleaning=True,
+            )
+
+    def test_organize_books_returns_error_when_misconfigured(self, monkeypatch, tmp_path):
+        """`organize_books` returns a clean error result; `step_organize` not called.
+
+        The `_build_config` stub mirrors real production behavior: it builds the
+        Config AND runs `_validate_profanity_config` so the handler's wrap
+        exercises the same code path the live server does on misconfiguration.
+        """
+        mcp = _MCP_SERVER
+        monkeypatch.delenv("REMOTE_WHISPER_URL", raising=False)
+
+        mcp._last_downloaded_asins = []
+
+        def _stub_config(**_kwargs):
+            cfg = Config()
+            cfg.source_audio_book_directory = str(tmp_path)
+            cfg.destination_book_directory = str(tmp_path)
+            cfg.audio_file_extension = ".m4b"
+            cfg.copy_instead_of_move = False
+            cfg.libation_folder_cleanup = False
+            cfg.download_program = "Libation"
+            cfg.purchased_how_long_ago = 0
+            cfg.libation_file_locations_path = ""
+            cfg.enable_profanity_cleaning = True
+            cfg.remote_whisper_url = ""
+            # Replicate production semantics: validate before returning.
+            mcp._validate_profanity_config(cfg)
+            return cfg
+
+        monkeypatch.setattr(mcp, "_build_config", _stub_config)
+
+        # Decode the JSON-stringified result so the assertions read naturally.
+        def _passthrough_result(_name, _t, result, **_k):
+            return json.loads(result) if isinstance(result, str) else result
+
+        monkeypatch.setattr(mcp, "_record_tool_result", _passthrough_result)
+
+        # Spy: if validation+wrap works, this will never run. If it does run,
+        # the spy captures that fact for the assertion below.
+        def _spy_step_organize(*_args, **_kwargs):
+            raise AssertionError(
+                "step_organize must not be called when validation fails"
+            )
+
+        monkeypatch.setattr(mcp, "step_organize", _spy_step_organize)
+        monkeypatch.setattr(mcp, "_detect_audio_extension", lambda _p: "")
+
+        result = mcp.organize_books(audio_file_extension=".m4b", enable_profanity_cleaning=True)
+
+        assert isinstance(result, dict)
+        assert result.get("success") is False, (
+            f"organize_books should report failure when misconfigured; got {result!r}"
+        )
+        assert result.get("step") == "organize"
+        assert "REMOTE_WHISPER_URL" in result.get("error", ""), (
+            f"error message should name REMOTE_WHISPER_URL; got {result.get('error')!r}"
+        )
+

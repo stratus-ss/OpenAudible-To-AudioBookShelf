@@ -502,7 +502,47 @@ def _build_config(
     cfg.timeout = int(_env("TIMEOUT", "600"))
     cfg.confidence_threshold = float(_env("CONFIDENCE_THRESHOLD", "0.70"))
     cfg.beep_mode = _env("BEEP_MODE", "false").lower() == "true"
+    _validate_profanity_config(cfg)
     return cfg
+
+
+def _validate_profanity_config(cfg: Config) -> None:
+    """Validate profanity cleaning config and auto-discover swears file.
+
+    The MCP path constructs Config directly via _build_config and never reaches
+    Config._validate(), so the MonkeyPlug checks that live there are bypassed.
+    Without this guard, AudioCleaner proceeds with empty remoteUrl or empty
+    swears_file and WhisperPlugger fails at init, after which process_audio_file
+    silently falls back to the original file and the move step still runs.
+    Fail loud, fail early.
+    """
+    if not getattr(cfg, "enable_profanity_cleaning", False):
+        return
+    url = (getattr(cfg, "remote_whisper_url", "") or "").strip()
+    if not url:
+        raise ValueError(
+            "Profanity cleaning is enabled but REMOTE_WHISPER_URL is not set. "
+            "Configure a Whisper-WebUI endpoint in .env "
+            "(e.g. REMOTE_WHISPER_URL=http://whisper-host:8000) or disable "
+            "profanity cleaning via ENABLE_PROFANITY_CLEANING=false."
+        )
+    swears = (getattr(cfg, "swears_file", "") or "").strip()
+    if swears:
+        return
+    try:
+        import monkeyplug
+        monkeyplug_dir = os.path.dirname(monkeyplug.__file__)
+        default_swears = os.path.join(monkeyplug_dir, "swears.txt")
+        if os.path.exists(default_swears):
+            cfg.swears_file = default_swears
+            return
+    except ImportError:
+        pass
+    raise ValueError(
+        "Profanity cleaning is enabled but SWEARS_FILE is not set and "
+        "MonkeyPlug's bundled swears.txt was not found. Install the "
+        "monkeyplug package or set SWEARS_FILE in .env."
+    )
 
 
 @mcp.tool()
@@ -813,17 +853,25 @@ def organize_books(
     _tool_start = time.monotonic()
     user_specified_ext = audio_file_extension is not None
 
-    cfg = _build_config(
-        library=library,
-        source_dir=source_dir,
-        destination_dir=destination_dir,
-        audio_file_extension=audio_file_extension,
-        copy_instead_of_move=copy_instead_of_move,
-        libation_folder_cleanup=libation_folder_cleanup,
-        libation_file_locations_path=libation_file_locations_path,
-        enable_profanity_cleaning=enable_profanity_cleaning,
-        purchased_how_long_ago=purchased_how_long_ago,
-    )
+    try:
+        cfg = _build_config(
+            library=library,
+            source_dir=source_dir,
+            destination_dir=destination_dir,
+            audio_file_extension=audio_file_extension,
+            copy_instead_of_move=copy_instead_of_move,
+            libation_folder_cleanup=libation_folder_cleanup,
+            libation_file_locations_path=libation_file_locations_path,
+            enable_profanity_cleaning=enable_profanity_cleaning,
+            purchased_how_long_ago=purchased_how_long_ago,
+        )
+    except ValueError as e:
+        return _record_tool_result(
+            "organize_books",
+            _tool_start,
+            json.dumps({"step": "organize", "success": False, "error": str(e)}),
+            success=False,
+        )
 
     if not user_specified_ext:
         detected = _detect_audio_extension(Path(cfg.source_audio_book_directory))
@@ -1169,22 +1217,30 @@ def ingest_books(
         abs_api_token: ABS API bearer token (default: from .env or library config).
     """
     _tool_start = time.monotonic()
-    cfg = _build_config(
-        library=library,
-        source_dir=source_dir,
-        destination_dir=destination_dir,
-        audio_file_extension=audio_file_extension,
-        copy_instead_of_move=copy_instead_of_move,
-        libation_folder_cleanup=libation_folder_cleanup,
-        libation_file_locations_path=libation_file_locations_path,
-        enable_profanity_cleaning=enable_profanity_cleaning,
-        purchased_how_long_ago=purchased_how_long_ago,
-        abs_server_url=abs_server_url,
-        abs_library_id=abs_library_id,
-        abs_api_token=abs_api_token,
-        libation_cli=libation_cli,
-        asins=asins,
-    )
+    try:
+        cfg = _build_config(
+            library=library,
+            source_dir=source_dir,
+            destination_dir=destination_dir,
+            audio_file_extension=audio_file_extension,
+            copy_instead_of_move=copy_instead_of_move,
+            libation_folder_cleanup=libation_folder_cleanup,
+            libation_file_locations_path=libation_file_locations_path,
+            enable_profanity_cleaning=enable_profanity_cleaning,
+            purchased_how_long_ago=purchased_how_long_ago,
+            abs_server_url=abs_server_url,
+            abs_library_id=abs_library_id,
+            abs_api_token=abs_api_token,
+            libation_cli=libation_cli,
+            asins=asins,
+        )
+    except ValueError as e:
+        return _record_tool_result(
+            "ingest_books",
+            _tool_start,
+            json.dumps({"success": False, "error": str(e)}),
+            success=False,
+        )
     results = {}
 
     LOGGER.info("Step 1/6: Scanning Audible library")
