@@ -20,6 +20,7 @@ allowed_tools:
   - mcp__audiobook-ingestion__get_tool_metrics
   - mcp__audiobook-ingestion__query_tool_metrics_history
   - mcp__audiobook-ingestion__get_cleaning_progress
+  - mcp__audiobook-ingestion__get_job_result
   - mcp__audiobook-ingestion__search_podcasts
   - mcp__audiobook-ingestion__add_podcast
   - mcp__audiobook-ingestion__list_podcasts
@@ -171,6 +172,7 @@ Two libraries exist: **adult** and **kids**. Always specify `library=`. If the u
 7. Always pass `library="kids"` or `library="adult"` explicitly. Omitting defaults to adult (wrong path).
 8. Extract the ASIN from `list_library` output. Only ask the user if all searches failed.
 9. Always pass `cleanup_files=true` when deleting from ABS. The MCP defaults to DB-only delete; ABS's file watcher (`disableWatcher=false` on both libraries) re-imports the orphaned `.m4b` under a fresh UUID within ~5 seconds -- the tool still reports `success=true`, so the failure only surfaces when the user reopens the UI.
+10. When `enable_profanity_cleaning=true`, `organize_books` returns in **~4ms** with a `job_id`. Do NOT assume the work is done — poll `get_job_result(job_id)` for the final response. The full `moved[]` / `cleaning_failures[]` / `cleaning` counters live in `get_job_result`'s `result` field, not in the immediate return.
 
 ## Worked Example -- Chrysalis Book 4 to Kids Library
 
@@ -224,13 +226,58 @@ Download error? Retry once silently, report in summary if still failing.
 
 | Cost Tier | Tool(s) | Approx Tokens |
 |-----------|---------|---------------|
-| Free | `list_libraries`, `get_status`, `get_tool_metrics`, `get_cleaning_progress` | <500 |
+| Free | `list_libraries`, `get_status`, `get_tool_metrics`, `get_cleaning_progress`, `get_job_result` | <500 |
 | Cheap | `list_abs_library` (filtered), `search_abs_library` | <2k |
 | Medium | `scan_audible`, `export_library`, `scan_audiobookshelf`, `match_audiobookshelf` | 1-5k |
 | Expensive | `list_library` (Libation export) | 50k-150k |
 | Slow | `download_books`, `organize_books` | Time-bound |
 
 **Never call `list_library` when `list_abs_library` with filters will do.** Cost difference: 100-200x.
+
+## Profanity Cleaning Timing
+
+Measured on 2026-07-24 against the production Whisper backend (RTX 5060 Ti, `tiny` model, `${REMOTE_WHISPER_URL}`):
+
+**~8.13 min per hour of audio** — source: `agent_planning/execution/profanity_cleaning_mcp_friendly/artifacts/benchmark_result.json` (Task 5, 71.4 min of DCC audio, 3 books, 580.8s wallclock). Functional test re-confirmed at **7.72 min/hour** (Task 6, same dataset). Plan for **~8 min per hour** of source audio when scheduling.
+
+ETA formula: `(elapsed_sec / books_done) * (books_total - books_done)`. If `books_done == 0`, ETA is null. Measured accuracy: **±3%** on 3-book batch (within the ±25% design tolerance).
+
+## Async Job Pattern (organize_books / ingest_books)
+
+`organize_books` and `ingest_books` use an **async job pattern** (DR-6). They return immediately with a job handle; the actual work runs in a background thread.
+
+```
+1. Call organize_books(library="adult", enable_profanity_cleaning=true, ...)
+   → returns {"job_id": "abc123def456", "status": "started"} in ~4ms
+
+2. Poll get_cleaning_progress() for per-book/per-stage progress (free, fast — 2–5ms each).
+   Use it to display "Cleaning — 2 of 5 done" updates in your optional Message 2.
+
+3. Poll get_job_result(job_id="abc123def456") to check completion.
+   While running: {"status": "running", "job_id": "..."}
+   On completion: {"status": "completed", "job_id": "...", "result": {...}}
+
+4. Extract the full response from get_job_result's `result` field.
+   The `result` dict matches the previous synchronous organize_books schema
+   (moved[], cleaning_failures[], cleaning{total_cleaned,total_failed,total_profanities}, etc.).
+```
+
+**Single-slot guard.** Only one job runs at a time. If a job is already running, `organize_books` returns `{"error": "Job already running", "active_job_id": "<existing>"}` and does NOT start a new one.
+
+**Unknown job after server restart.** If the MCP server restarts mid-job, `get_job_result` returns `{"error": "Unknown job", "job_id": "<old>"}`. Re-invoke `organize_books` to restart the work.
+
+### Response fields — organize_books (via get_job_result)
+
+When `enable_profanity_cleaning=true`, the `result` dict includes:
+- `cleaning_failures[]`: list of `{asin, title, error}` for books whose cleaning failed. Failed books are **absent** from `moved[]` — the batch continues with remaining books.
+- `cleaning`: `{total_cleaned, total_failed, total_profanities}` — aggregate counters.
+
+### Progress fields — get_cleaning_progress
+
+- `stage`: `staging` | `uploading` | `transcribing` | `done` | `failed` | `skipped` — the current per-book stage
+- `books_done`: integer, count of books that reached `done` stage
+- `books_total`: integer, total books in the current batch
+- Per-ASIN entries include the current `stage` for that book
 
 ## Pipeline Step Reference
 
@@ -244,7 +291,8 @@ Download error? Retry once silently, report in summary if still failing.
 | 6 | `organize_books` | `library="target"` | Move into Author/Series/Title tree. |
 | 7 | `scan_audiobookshelf` | `library="target"` | ABS discovers new files. ~20s. |
 | 8 | `match_audiobookshelf` | `library="target"`, `days_ago=1` | Link to Audible metadata. |
-| 8.5 | `get_cleaning_progress` | -- | Poll mid-operation for per-book profanity cleaning progress. Returns JSON with per-ASIN state (processing/transcribing/done/failed/skipped). Free to call. Use when `organize_books` or `ingest_books` is invoked with `enable_profanity_cleaning=true` and the operation takes more than 2 minutes. |
+| 8.5 | `get_cleaning_progress` | -- | Poll mid-operation for per-book profanity cleaning progress. Returns JSON with per-ASIN state (processing/transcribing/done/failed/skipped) plus `stage` (staging\|uploading\|transcribing\|done\|failed\|skipped), `books_done`, `books_total` counters. Free to call. Use when `organize_books` or `ingest_books` is invoked with `enable_profanity_cleaning=true` and the operation takes more than 2 minutes. Safe to call concurrently with the long-running job — returns in 2–5ms. |
+| 8.6 | `get_job_result` | `job_id="<id>"` | Poll for the final result of an async `organize_books` or `ingest_books` call. Returns `{"status": "completed", "result": {...}}` when done, `{"status": "running"}` while in progress, or `{"error": "Unknown job"}` if the server restarted mid-job. Free to call. |
 | 9 | `delete_library_items` | `library=`, `item_ids=[...]`, **`cleanup_files=true`** | DB-only delete leaves the file on disk; ABS watcher (`disableWatcher=false`) resurrects the entry under a new UUID within seconds. |
 
 ## Troubleshooting
@@ -258,6 +306,7 @@ Download error? Retry once silently, report in summary if still failing.
 | Matching failing | Ensure `scan_audiobookshelf` completed before `match_audiobookshelf` |
 | MCP unresponsive / "Session not found" | Call `mcp__moltis-admin__restart_mcp_server(server_name="audiobook-ingestion")`. If that fails, ask the user to restart it manually. |
 | Book keeps reappearing after delete | You forgot `cleanup_files=true`. Re-call `delete_library_items(..., cleanup_files=true)`; if the file is still on disk the watcher will resurrect it again. Use `get_source_status` to confirm the book folder is gone. |
+| Profanity cleaning fails for some books | Check `cleaning_failures[]` in the `organize_books` `result` (via `get_job_result`) — each entry has `{asin, title, error}`. Failed books are skipped (absent from `moved[]`); remaining books continue. To retry a failed book, re-run `organize_books` with the same parameters — the resume state will pick it up. |
 
 ## Podcast Workflow
 

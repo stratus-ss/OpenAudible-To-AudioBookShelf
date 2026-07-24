@@ -284,6 +284,7 @@ log/
 !README.md
 !abs-mcp/skills/*.md
 !docs/*.md
+!openspec/specs/**/*.md
 
 # Exclude sample_files directory (contains private testing files)
 sample_files/

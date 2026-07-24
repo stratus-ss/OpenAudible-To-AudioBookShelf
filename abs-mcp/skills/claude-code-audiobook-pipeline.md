@@ -15,7 +15,7 @@ Do NOT trigger for unrelated topics.
 
 | Cost Tier | Tool(s) | Approx Tokens |
 |-----------|---------|---------------|
-| Free | `list_libraries`, `get_status`, `get_tool_metrics` | <500 |
+| Free | `list_libraries`, `get_status`, `get_tool_metrics`, `get_cleaning_progress`, `get_job_result` | <500 |
 | Cheap | `list_abs_library` (filtered), `search_abs_library` | <2k |
 | Medium | `scan_audible`, `export_library`, `scan_audiobookshelf`, `match_audiobookshelf` | 1–5k |
 | Expensive | `list_library` (full Libation export) | 50k–150k |
@@ -118,9 +118,11 @@ Report progress after each step.
 | 1 | `scan_audible` | — | Refresh Audible listing. ~10s. |
 | 2 | `download_books` | `asins=["B0X"]` | Specific ASINs. Omit for all new. Minutes. |
 | 3 | `export_library` | — | Refresh libation.json. ~2s. |
-| 4 | `organize_books` | `library="adult"` | Move into Author/Series/Title tree. |
+| 4 | `organize_books` | `library="adult"` | Move into Author/Series/Title tree. **Async job pattern** — returns in ~4ms with `{"job_id": "...", "status": "started"}`. Poll `get_job_result(job_id)` for the final response. |
 | 5 | `scan_audiobookshelf` | `library="adult"` | ABS discovers new files. ~20s. |
 | 6 | `match_audiobookshelf` | `library="adult"`, `days_ago=1` | Link ABS items to Audible metadata. |
+| 6.5 | `get_cleaning_progress` | -- | Mid-operation progress for profanity cleaning. Returns per-ASIN state plus `stage`, `books_done`, `books_total` counters. Free to call concurrently. |
+| 6.6 | `get_job_result` | `job_id="<id>"` | Retrieve the final result of an async `organize_books`/`ingest_books` job. Returns `{"status": "completed", "result": {...}}` when done. Free. |
 
 ## Podcast Workflow
 
@@ -144,6 +146,27 @@ ssh stratus@open-audible
 - Matching failing → ensure `scan_audiobookshelf` completed before `match_audiobookshelf`
 - MCP unresponsive → SSH to `stratus@open-audible` and restart the server
 - Need to re-download → `set_book_status(asins=["B0X"], status="not-downloaded")` then `download_books`
+- `organize_books` returned but no progress → `organize_books` is now async — it returns in ~4ms with a `job_id`. Poll `get_job_result(job_id)` for the full response. If `get_job_result` returns `{"error": "Unknown job"}`, the server restarted mid-job; re-invoke `organize_books`.
+- Some books skipped during cleaning → check `cleaning_failures[]` in the `organize_books` `result` (via `get_job_result`). Failed books are absent from `moved[]`; batch continues with remaining books.
+
+## Profanity Cleaning Timing
+
+Measured on 2026-07-24 against production Whisper backend (RTX 5060 Ti, `tiny` model): **~8.13 min per hour of audio** (source: `agent_planning/execution/profanity_cleaning_mcp_friendly/artifacts/benchmark_result.json`). Plan for **~8 min per hour** of source audio when scheduling.
+
+ETA formula: `(elapsed_sec / books_done) * (books_total - books_done)`. Accuracy: ±25% (measured: ±3% on the 3-book benchmark).
+
+## Async Job Pattern (DR-6)
+
+`organize_books` and `ingest_books` are async:
+
+1. Call `organize_books(...)` → returns `{"job_id": "...", "status": "started"}` in ~4ms
+2. Poll `get_cleaning_progress()` for per-book stage progress (2–5ms each, free)
+3. Poll `get_job_result(job_id="...")` for the final response
+4. On `{"status": "completed", "result": {...}}` → use `result` as the previous synchronous `organize_books` response
+
+Single-slot guard: if a job is running, `organize_books` returns `{"error": "Job already running", "active_job_id": "..."}` and does NOT start a new one.
+
+When `enable_profanity_cleaning=true`, the `result` dict includes `cleaning_failures[]` (list of `{asin, title, error}`) and `cleaning{total_cleaned, total_failed, total_profanities}`.
 
 ## Activation
 
