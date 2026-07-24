@@ -14,7 +14,7 @@ from openaudible_to_audiobookshelf.audio_bookshelf import (
     process_audio_books,
     scan_library_for_books,
 )
-from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner
+from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner, AudioCleaningError
 from openaudible_to_audiobookshelf.config import Config
 from openaudible_to_audiobookshelf.utils import (
     _parse_date,
@@ -188,6 +188,8 @@ def move_audio_book_files(
     books_to_process_in_audio_bookself = []
     total_in_source = len(books)
     skipped_reasons: dict[str, str] = {}
+    if audio_cleaner:
+        audio_cleaner.set_book_count(total_in_source)
     for book in books:
         try:
             if download_program == "OpenAudible":
@@ -270,9 +272,23 @@ def move_audio_book_files(
             # Clean audio file if profanity cleaning is enabled
             file_to_process = downloaded_audio_file_path
             if audio_cleaner:
-                file_to_process = audio_cleaner.process_audio_file(
-                    downloaded_audio_file_path, book_data
-                )
+                try:
+                    file_to_process = audio_cleaner.process_audio_file(
+                        downloaded_audio_file_path, book_data
+                    )
+                except AudioCleaningError as e:
+                    LOGGER.error(
+                        "Profanity cleaning failed for %s: %s",
+                        book_data.get("title", "Unknown"),
+                        e,
+                    )
+                    if _tracking is not None:
+                        _tracking.setdefault("failed_books", []).append({
+                            "asin": book_data.get("asin", ""),
+                            "title": book_data.get("title", "Unknown"),
+                            "error": str(e),
+                        })
+                    continue
 
             if os.path.exists(file_to_process):
                 if copy_instead_of_move:
@@ -423,6 +439,16 @@ def step_organize(
 
     moved = [b.get("title", "Unknown") for b in processed]
     log_content = log_file.getvalue() if isinstance(log_file, io.StringIO) else ""
+
+    failed_books = tracking.get("failed_books", [])
+    cleaning_failures_capped = failed_books[:50]
+    if len(failed_books) > 50:
+        cleaning_failures_capped.append({
+            "asin": "",
+            "title": f"+{len(failed_books) - 50} more failures",
+            "error": "",
+        })
+
     return {
         "step": "organize",
         "success": True,
@@ -434,6 +460,7 @@ def step_organize(
         "applied_asins": tracking.get("applied_asins") or [],
         "destination_dir": config.destination_book_directory,
         "cleaning": cleaning_stats,
+        "cleaning_failures": cleaning_failures_capped,
         "log": log_content,
         "_book_list": processed,
     }

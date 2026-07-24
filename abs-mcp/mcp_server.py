@@ -11,6 +11,7 @@ Calls directly into the openaudible_to_audiobookshelf package --
 no duplication of logic.
 """
 
+import asyncio
 import io
 import json
 import logging
@@ -20,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 
 import feedparser
@@ -95,6 +97,12 @@ PARSER = LibraryDataParser()
 # organize_books reads (and clears) them so only those books are processed.
 # Falls back to a disk-scan if the list is empty (e.g. after a process restart).
 _last_downloaded_asins: list[str] = []
+
+# Async job pattern (DR-6): long-running tools (organize_books, ingest_books)
+# return a job_id immediately and run their work in the background via
+# asyncio.create_task. Single-slot — only one job runs at a time.
+# Accessed only from the event-loop thread; no lock needed.
+_active_job: dict | None = None
 
 
 class InMemoryEventStore(EventStore):
@@ -836,44 +844,18 @@ def export_library(
     )
 
 
-@mcp.tool()
-def organize_books(
-    purchased_how_long_ago: int = 0,
-    library: str | None = None,
-    source_dir: str | None = None,
-    destination_dir: str | None = None,
-    audio_file_extension: str | None = None,
-    copy_instead_of_move: bool | None = None,
-    libation_folder_cleanup: bool | None = None,
-    libation_file_locations_path: str | None = None,
-    enable_profanity_cleaning: bool | None = None,
+def _sync_organize_books(
+    purchased_how_long_ago: int,
+    library: str | None,
+    source_dir: str | None,
+    destination_dir: str | None,
+    audio_file_extension: str | None,
+    copy_instead_of_move: bool | None,
+    libation_folder_cleanup: bool | None,
+    libation_file_locations_path: str | None,
+    enable_profanity_cleaning: bool | None,
 ) -> str:
-    """Organize downloaded audiobooks into the ABS directory structure.
-
-    Reads the Libation JSON export, filters by purchase date, and moves/copies
-    audio files into an Author/Series/Title folder hierarchy.
-
-    Default audio format is .m4b. If no .m4b files are found in the source
-    directory, the tool auto-detects the actual extension present. Pass
-    audio_file_extension='.mp3' only if you specifically need mp3.
-
-    Args:
-        purchased_how_long_ago: Process books purchased within this many days. 0 means all.
-        library: Library name from libraries.yaml (e.g. 'kids', 'adult').
-        source_dir: Libation books directory (default: from .env).
-        destination_dir: ABS audiobooks directory (default: from .env or library config).
-        audio_file_extension: File extension (default: .m4b, auto-detects if no .m4b found).
-        copy_instead_of_move: Copy files instead of moving (default: from .env).
-        libation_folder_cleanup: Delete Libation source folders after move (default: from .env).
-        libation_file_locations_path: Path to Libation FileLocationsV2.json (default: from .env).
-        enable_profanity_cleaning: Enable monkeyplug profanity filtering (default: from .env).
-
-        Note: When enable_profanity_cleaning=True, expect ~2-5 min per hour
-        of audio content, heavily dependent on Whisper backend load.
-        Audio files >150MB are split into ~145MB chunks and processed
-        sequentially. Use get_cleaning_progress() to poll progress
-        mid-operation.
-    """
+    """Synchronous organize_books implementation — runs in thread pool via asyncio.to_thread."""
     _tool_start = time.monotonic()
     user_specified_ext = audio_file_extension is not None
 
@@ -920,6 +902,126 @@ def organize_books(
 
     result = step_organize(cfg, asins=download_asins if download_asins else None)
     clean = {k: v for k, v in result.items() if not k.startswith("_")}
+    clean["audio_file_extension"] = cfg.audio_file_extension
+    return _record_tool_result(
+        "organize_books",
+        _tool_start,
+        json.dumps(clean),
+        success=not bool(clean.get("error")),
+    )
+
+
+@mcp.tool()
+async def organize_books(
+    purchased_how_long_ago: int = 0,
+    library: str | None = None,
+    source_dir: str | None = None,
+    destination_dir: str | None = None,
+    audio_file_extension: str | None = None,
+    copy_instead_of_move: bool | None = None,
+    libation_folder_cleanup: bool | None = None,
+    libation_file_locations_path: str | None = None,
+    enable_profanity_cleaning: bool | None = None,
+) -> dict:
+    """Organize downloaded audiobooks into the ABS directory structure.
+
+    ASYNC JOB PATTERN (DR-6): Returns immediately with a job handle.
+    Poll progress and retrieve results using:
+        1. get_cleaning_progress() — per-book/per-stage progress
+        2. get_job_result(job_id)  — final result when job completes
+
+    Returns immediately:
+        {"job_id": str, "status": "started"}
+
+    If another job is already running:
+        {"error": str, "active_job_id": str}
+
+    Reads the Libation JSON export, filters by purchase date, and moves/copies
+    audio files into an Author/Series/Title folder hierarchy.
+
+    Default audio format is .m4b. If no .m4b files are found in the source
+    directory, the tool auto-detects the actual extension present. Pass
+    audio_file_extension='.mp3' only if you specifically need mp3.
+
+    Args:
+        purchased_how_long_ago: Process books purchased within this many days. 0 means all.
+        library: Library name from libraries.yaml (e.g. 'kids', 'adult').
+        source_dir: Libation books directory (default: from .env).
+        destination_dir: ABS audiobooks directory (default: from .env or library config).
+        audio_file_extension: File extension (default: .m4b, auto-detects if no .m4b found).
+        copy_instead_of_move: Copy files instead of moving (default: from .env).
+        libation_folder_cleanup: Delete Libation source folders after move (default: from .env).
+        libation_file_locations_path: Path to Libation FileLocationsV2.json (default: from .env).
+        enable_profanity_cleaning: Enable monkeyplug profanity filtering (default: from .env).
+
+        Note: When enable_profanity_cleaning=True, expect ~2-5 min per hour
+        of audio content, heavily dependent on Whisper backend load.
+        Audio files >150MB are split into ~145MB chunks and processed
+        sequentially. Use get_cleaning_progress() to poll progress
+        mid-operation.
+
+    Response (via get_job_result) includes `cleaning_failures[]` when
+    profanity cleaning is enabled and any book fails cleaning:
+        {"asin": str, "title": str, "error": str}
+
+    The `cleaning` key contains aggregate stats:
+        {"total_cleaned": int, "total_failed": int, "total_profanities": int}
+
+    Books that fail cleaning are absent from `moved[]` — the batch
+    continues to the next book. Check `cleaning_failures[]` for why.
+    """
+    global _active_job
+
+    if _active_job is not None and not _active_job["task"].done():
+        return {
+            "error": "A job is already running. Poll get_job_result() for its status.",
+            "active_job_id": _active_job["id"],
+        }
+
+    job_id = uuid.uuid4().hex[:12]
+
+    async def _run():
+        result = await asyncio.to_thread(
+            _sync_organize_books,
+            purchased_how_long_ago, library, source_dir, destination_dir,
+            audio_file_extension, copy_instead_of_move, libation_folder_cleanup,
+            libation_file_locations_path, enable_profanity_cleaning,
+        )
+        _active_job["result"] = result
+
+    task = asyncio.create_task(_run())
+    _active_job = {"id": job_id, "task": task, "result": None}
+
+    return {"job_id": job_id, "status": "started"}
+
+
+@mcp.tool()
+def get_job_result(job_id: str) -> dict:
+    """Get the result of a background organize_books or ingest_books job.
+
+    Call this after organize_books returns {"job_id": "...", "status": "started"}.
+    Returns the job status or the full result when complete.
+
+    Args:
+        job_id: The job_id returned by organize_books or ingest_books.
+
+    Returns:
+        {"status": "running", "job_id": str}  — job still in progress
+        {"status": "completed", "job_id": str, "result": str}  — job finished
+        {"status": "failed", "job_id": str, "error": str}  — job raised an exception
+        {"error": "Unknown job", "job_id": str}  — no job with that ID (expired or server restarted)
+    """
+    if _active_job is None or _active_job["id"] != job_id:
+        return {"error": "Unknown job", "job_id": job_id}
+
+    if not _active_job["task"].done():
+        return {"status": "running", "job_id": job_id}
+
+    exc = _active_job["task"].exception()
+    if exc is not None:
+        return {"status": "failed", "job_id": job_id, "error": str(exc)}
+
+    return {"status": "completed", "job_id": job_id, "result": _active_job["result"]}
     clean["audio_file_extension"] = cfg.audio_file_extension
     return _record_tool_result(
         "organize_books",
@@ -1202,52 +1304,23 @@ def match_audiobookshelf(
     )
 
 
-@mcp.tool()
-def ingest_books(
-    asins: list[str] | None = None,
-    purchased_how_long_ago: int = 0,
-    library: str | None = None,
-    source_dir: str | None = None,
-    destination_dir: str | None = None,
-    audio_file_extension: str | None = None,
-    copy_instead_of_move: bool | None = None,
-    libation_folder_cleanup: bool | None = None,
-    libation_file_locations_path: str | None = None,
-    libation_cli: str | None = None,
-    enable_profanity_cleaning: bool | None = None,
-    abs_server_url: str | None = None,
-    abs_library_id: str | None = None,
-    abs_api_token: str | None = None,
+def _sync_ingest_books(
+    asins: list[str] | None,
+    purchased_how_long_ago: int,
+    library: str | None,
+    source_dir: str | None,
+    destination_dir: str | None,
+    audio_file_extension: str | None,
+    copy_instead_of_move: bool | None,
+    libation_folder_cleanup: bool | None,
+    libation_file_locations_path: str | None,
+    libation_cli: str | None,
+    enable_profanity_cleaning: bool | None,
+    abs_server_url: str | None,
+    abs_library_id: str | None,
+    abs_api_token: str | None,
 ) -> str:
-    """End-to-end pipeline: scan -> download -> export -> organize -> scan ABS -> match.
-
-    WARNING: This runs all six steps sequentially and can take 30+ minutes.
-    LLM agents should prefer calling individual step tools for reliability:
-      scan_audible -> download_books -> export_library -> organize_books
-      -> scan_audiobookshelf -> match_audiobookshelf
-
-    Args:
-        asins: Optional list of ASINs to download. If empty, downloads all new books.
-        purchased_how_long_ago: Process books purchased within this many days. 0 means all.
-        library: Library name from libraries.yaml (e.g. 'kids', 'adult').
-        source_dir: Libation books directory (default: from .env).
-        destination_dir: ABS audiobooks directory (default: from .env or library config).
-        audio_file_extension: File extension, e.g. '.m4b' (default: from .env).
-        copy_instead_of_move: Copy files instead of moving (default: from .env).
-        libation_folder_cleanup: Delete Libation source folders after move (default: from .env).
-        libation_file_locations_path: Path to Libation FileLocationsV2.json (default: from .env).
-        libation_cli: Path to libationcli binary (default: from .env).
-        enable_profanity_cleaning: Enable monkeyplug profanity filtering (default: from .env).
-        abs_server_url: ABS server URL (default: from .env or library config).
-        abs_library_id: ABS library UUID (default: from .env or library config).
-        abs_api_token: ABS API bearer token (default: from .env or library config).
-
-        Note: When enable_profanity_cleaning=True, expect ~2-5 min per hour
-        of audio content, heavily dependent on Whisper backend load.
-        Audio files >150MB are split into ~145MB chunks and processed
-        sequentially. Use get_cleaning_progress() to poll progress
-        mid-operation.
-    """
+    """Synchronous ingest_books implementation — runs in thread pool via asyncio.to_thread."""
     _tool_start = time.monotonic()
     try:
         cfg = _build_config(
@@ -1304,6 +1377,93 @@ def ingest_books(
         results["match"] = "skipped (no new books)"
 
     return _record_tool_result("ingest_books", _tool_start, json.dumps(results))
+
+
+@mcp.tool()
+async def ingest_books(
+    asins: list[str] | None = None,
+    purchased_how_long_ago: int = 0,
+    library: str | None = None,
+    source_dir: str | None = None,
+    destination_dir: str | None = None,
+    audio_file_extension: str | None = None,
+    copy_instead_of_move: bool | None = None,
+    libation_folder_cleanup: bool | None = None,
+    libation_file_locations_path: str | None = None,
+    libation_cli: str | None = None,
+    enable_profanity_cleaning: bool | None = None,
+    abs_server_url: str | None = None,
+    abs_library_id: str | None = None,
+    abs_api_token: str | None = None,
+) -> dict:
+    """End-to-end pipeline: scan -> download -> export -> organize -> scan ABS -> match.
+
+    ASYNC JOB PATTERN (DR-6): Returns immediately with a job handle.
+    Poll progress and retrieve results using:
+        1. get_cleaning_progress() — per-book/per-stage progress
+        2. get_job_result(job_id)  — final result when job completes
+
+    Returns immediately:
+        {"job_id": str, "status": "started"}
+
+    If another job is already running:
+        {"error": str, "active_job_id": str}
+
+    WARNING: This runs all six steps sequentially and can take 30+ minutes.
+    LLM agents should prefer calling individual step tools for reliability:
+      scan_audible -> download_books -> export_library -> organize_books
+      -> scan_audiobookshelf -> match_audiobookshelf
+
+    Args:
+        asins: Optional list of ASINs to download. If empty, downloads all new books.
+        purchased_how_long_ago: Process books purchased within this many days. 0 means all.
+        library: Library name from libraries.yaml (e.g. 'kids', 'adult').
+        source_dir: Libation books directory (default: from .env).
+        destination_dir: ABS audiobooks directory (default: from .env or library config).
+        audio_file_extension: File extension, e.g. '.m4b' (default: from .env).
+        copy_instead_of_move: Copy files instead of moving (default: from .env).
+        libation_folder_cleanup: Delete Libation source folders after move (default: from .env).
+        libation_file_locations_path: Path to Libation FileLocationsV2.json (default: from .env).
+        libation_cli: Path to libationcli binary (default: from .env).
+        enable_profanity_cleaning: Enable monkeyplug profanity filtering (default: from .env).
+        abs_server_url: ABS server URL (default: from .env or library config).
+        abs_library_id: ABS library UUID (default: from .env or library config).
+        abs_api_token: ABS API bearer token (default: from .env or library config).
+
+        Note: When enable_profanity_cleaning=True, expect ~2-5 min per hour
+        of audio content, heavily dependent on Whisper backend load.
+        Audio files >150MB are split into ~145MB chunks and processed
+        sequentially. Use get_cleaning_progress() to poll progress
+        mid-operation.
+
+    The `organize` step response (via get_job_result) includes
+    `cleaning_failures[]` when profanity cleaning is enabled and any book
+    fails cleaning: {"asin": str, "title": str, "error": str}.
+    """
+    global _active_job
+
+    if _active_job is not None and not _active_job["task"].done():
+        return {
+            "error": "A job is already running. Poll get_job_result() for its status.",
+            "active_job_id": _active_job["id"],
+        }
+
+    job_id = uuid.uuid4().hex[:12]
+
+    async def _run():
+        result = await asyncio.to_thread(
+            _sync_ingest_books,
+            asins, purchased_how_long_ago, library, source_dir, destination_dir,
+            audio_file_extension, copy_instead_of_move, libation_folder_cleanup,
+            libation_file_locations_path, libation_cli, enable_profanity_cleaning,
+            abs_server_url, abs_library_id, abs_api_token,
+        )
+        _active_job["result"] = result
+
+    task = asyncio.create_task(_run())
+    _active_job = {"id": job_id, "task": task, "result": None}
+
+    return {"job_id": job_id, "status": "started"}
 
 
 @mcp.tool()
@@ -2217,10 +2377,30 @@ def get_cleaning_progress() -> str:
 
     Poll this mid-operation to check per-book status when
     enable_profanity_cleaning=True. Returns JSON with per-ASIN
-    progress and aggregate stats.
+    progress, per-stage state for the active book, and counters
+    for ETA computation.
 
     Returns empty progress if no cleaning operation is active or
     if the last operation completed without a progress callback.
+
+    Response schema (when active):
+        {
+            "asin": str,             # active book's ASIN (or last book's)
+            "book_title": str,
+            "status": str,           # processing|transcribing|done|failed|skipped
+            "stage": str,            # staging|uploading|transcribing|done|failed|skipped
+            "books_done": int,       # books completed so far
+            "books_total": int,      # total books in the batch
+            "profanities": int,      # count if status=done
+            "error": str             # if status=failed
+        }
+
+    ETA hint: derive as (elapsed_sec / books_done) * (books_total - books_done).
+    If books_done == 0, ETA is null. The MCP server does not compute ETA —
+    calling agents should track wall-clock time externally.
+
+    Note: This tool is callable concurrently while organize_books or
+    ingest_books is in flight (DR-6 async job pattern).
     """
     with _CLEANING_PROGRESS_LOCK:
         snapshot = dict(_cleaning_progress)

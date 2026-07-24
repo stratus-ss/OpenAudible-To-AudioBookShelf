@@ -325,7 +325,8 @@ class TestProcessAudioFile:
     @patch('openaudible_to_audiobookshelf.audio_cleaner.socket.create_connection')
     @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
     def test_returns_original_file_on_error(self, mock_plugger_class, mock_create_connection, base_config, mock_log_file):
-        """Test that original file is returned when processing fails."""
+        """DR-1: process_audio_file raises AudioCleaningError on failure (no silent fallback)."""
+        from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaningError
         mock_create_connection.return_value.__enter__ = lambda self: self
         mock_create_connection.return_value.__exit__ = lambda self, *args: None
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -341,9 +342,9 @@ class TestProcessAudioFile:
             cleaner = AudioCleaner(base_config, mock_log_file)
             book_data = {"asin": "TEST123", "title": "Test Book"}
 
-            result = cleaner.process_audio_file(source_file, book_data)
+            with pytest.raises(AudioCleaningError, match="Processing failed"):
+                cleaner.process_audio_file(source_file, book_data)
 
-            assert result == source_file
             assert cleaner.total_failed == 1
             assert cleaner.total_processed == 0
 

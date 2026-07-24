@@ -71,6 +71,7 @@ class AudioCleaner:
         self.total_failed = 0
         self.total_profanities = 0
         self._last_profanity_count = 0
+        self._book_count = 0
 
     # ============================================================================
     # UTILITY HELPERS
@@ -104,6 +105,10 @@ class AudioCleaner:
         log_message(self.log_file, message, level)
         self._logger.log(_LOG_LEVEL_MAP.get(level, logging.INFO), message)
 
+    def set_book_count(self, count: int) -> None:
+        """Set the total number of books to be processed for progress reporting."""
+        self._book_count = count
+
     # ============================================================================
     # MAIN PUBLIC METHODS
     # ============================================================================
@@ -120,7 +125,12 @@ class AudioCleaner:
             book_data: Book metadata dictionary
 
         Returns:
-            str: Path to cleaned file, or original file if processing fails
+            str: Path to cleaned file.
+
+        Raises:
+            AudioCleaningError: When processing fails. Caller is responsible for
+                handling the failure (e.g. skip the book and record the error);
+                this method never returns the original un-cleaned source_file.
         """
         try:
             book_title = book_data.get("title", "Unknown Title")
@@ -128,10 +138,16 @@ class AudioCleaner:
             if asin and self._is_already_processed(asin):
                 self._log_start_header(book_title)
                 self._log(f"Skipping — ASIN {asin} already processed (resume state)")
-                self._fire_progress(asin=asin, book_title=book_title, status="skipped")
+                self._fire_progress(
+                    asin=asin, book_title=book_title, status="skipped",
+                    stage="skipped", books_done=self.total_processed, books_total=self._book_count,
+                )
                 return source_file
 
-            self._fire_progress(asin=asin, book_title=book_title, status="processing")
+            self._fire_progress(
+                asin=asin, book_title=book_title, status="processing",
+                stage="staging", books_done=self.total_processed, books_total=self._book_count,
+            )
             self._log_start_header(book_title)
 
             if self.config.remote_whisper_url:
@@ -149,22 +165,31 @@ class AudioCleaner:
                     raise AudioCleaningError(
                         f"Whisper backend at {self.config.remote_whisper_url} is unreachable: {e}"
                     )
-            self._fire_progress(asin=asin, book_title=book_title, status="transcribing")
 
             paths = self._setup_output_paths(source_file, book_data)
             self._log_configuration(source_file, paths)
-            
+
             # Initialize plugger (with chunking params if needed)
             plugger = self._initialize_monkeyplug(source_file, paths)
-            
+
+            self._fire_progress(
+                asin=asin, book_title=book_title, status="processing",
+                stage="uploading", books_done=self.total_processed, books_total=self._book_count,
+            )
+
             # Let WhisperPlugger handle everything internally (including chunking)
             file_size_mb = os.path.getsize(source_file) / (1024 * 1024)
             if file_size_mb > self.CHUNKING_THRESHOLD_MB:
                 self._log("File is large (>150MB), will process with chunking")
             else:
-                self._log_transcription_start(source_file, 
+                self._log_transcription_start(source_file,
                     transcript_exists=paths["transcript_file"] and os.path.exists(paths["transcript_file"]))
-            
+
+            self._fire_progress(
+                asin=asin, book_title=book_title, status="processing",
+                stage="transcribing", books_done=self.total_processed, books_total=self._book_count,
+            )
+
             cleaned_file = plugger.EncodeCleanAudio()
             
             # Validate that a file path was returned
@@ -189,6 +214,8 @@ class AudioCleaner:
             self._mark_resume_status(asin, "done")
             self._fire_progress(
                 asin=asin, book_title=book_title, status="done",
+                stage="done",
+                books_done=self.total_processed, books_total=self._book_count,
                 profanities=self.total_profanities - getattr(self, "_last_profanity_count", 0),
             )
             self._last_profanity_count = self.total_profanities
@@ -198,12 +225,15 @@ class AudioCleaner:
             title = book_data.get("title", "Unknown")
             asin_fail = book_data.get("asin", "")
             self._log(f"Processing failed for {title}: {e}", "ERROR")
-            self._log("Using original file")
             self._mark_resume_status(asin_fail, "failed")
             self._fire_progress(
-                asin=asin_fail, book_title=title, status="failed", error=str(e)
+                asin=asin_fail, book_title=title, status="failed",
+                stage="failed", error=str(e),
+                books_done=self.total_processed, books_total=self._book_count,
             )
-            return source_file
+            if isinstance(e, AudioCleaningError):
+                raise
+            raise AudioCleaningError(str(e)) from e
 
     def cleanup_working_directory(self, keep_transcripts: bool = None):
         """

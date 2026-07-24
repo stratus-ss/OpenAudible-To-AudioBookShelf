@@ -574,7 +574,20 @@ def test_mcp_handoff_download_to_organize(monkeypatch, tmp_path):
     )
 
     # --- Phase 2: organize_books reads handoff, forwards, then clears ---
-    result = mcp.organize_books(audio_file_extension=".m4b")
+    # organize_books is now async (DR-6). Drive via asyncio.run + get_job_result.
+    import asyncio
+    async def _drive_organize():
+        result = await mcp.organize_books(audio_file_extension=".m4b")
+        assert "job_id" in result, f"Expected job_id, got {result}"
+        # Wait for the background task to finish, then retrieve the result.
+        for _ in range(200):
+            if mcp._active_job is not None and mcp._active_job["task"].done():
+                break
+            await asyncio.sleep(0.05)
+        jr = mcp.get_job_result(result["job_id"])
+        return jr["result"]
+
+    job_result = asyncio.run(_drive_organize())
     assert captured.get("called") is True, (
         "organize_books should have called step_organize"
     )
@@ -586,13 +599,21 @@ def test_mcp_handoff_download_to_organize(monkeypatch, tmp_path):
         "handoff is one-shot; global should be cleared after organize_books; "
         f"got {mcp._last_downloaded_asins!r}"
     )
-    assert result["step"] == "organize"
-    assert result["processed_count"] == 1
+    assert job_result["step"] == "organize"
+    assert job_result["processed_count"] == 1
 
     # --- Phase 3: no prior download → disk-scan fallback kicks in ---
     captured.clear()
     mcp._last_downloaded_asins = []  # simulate process restart / no prior download
-    result2 = mcp.organize_books(audio_file_extension=".m4b")
+    async def _drive_organize_2():
+        result = await mcp.organize_books(audio_file_extension=".m4b")
+        for _ in range(200):
+            if mcp._active_job is not None and mcp._active_job["task"].done():
+                break
+            await asyncio.sleep(0.05)
+        return mcp.get_job_result(result["job_id"])["result"]
+
+    job_result2 = asyncio.run(_drive_organize_2())
     assert captured.get("called") is True
     # The disk-scan returns every [B0…] ASIN it finds in the source dir;
     # downstream step_organize does the include/exclude decision. So we
@@ -605,7 +626,7 @@ def test_mcp_handoff_download_to_organize(monkeypatch, tmp_path):
     )
     # Global should still be cleared after fallback path.
     assert mcp._last_downloaded_asins == []
-    assert result2["step"] == "organize"
+    assert job_result2["step"] == "organize"
 
 
 # ---------------------------------------------------------------------------
@@ -753,7 +774,22 @@ class TestProfanityCleaningValidation:
         monkeypatch.setattr(mcp, "step_organize", _spy_step_organize)
         monkeypatch.setattr(mcp, "_detect_audio_extension", lambda _p: "")
 
-        result = mcp.organize_books(audio_file_extension=".m4b", enable_profanity_cleaning=True)
+        # organize_books is async (DR-6). Drive via asyncio.run.
+        import asyncio
+        async def _drive():
+            result = await mcp.organize_books(audio_file_extension=".m4b", enable_profanity_cleaning=True)
+            for _ in range(200):
+                if mcp._active_job is not None and mcp._active_job["task"].done():
+                    break
+                await asyncio.sleep(0.05)
+            return mcp.get_job_result(result["job_id"])
+
+        jr = asyncio.run(_drive())
+        result = jr["result"]
+        # _sync_organize_books wraps the ValueError into the response dict
+        # via _record_tool_result. The result is a JSON string; parse it.
+        if isinstance(result, str):
+            result = json.loads(result)
 
         assert isinstance(result, dict)
         assert result.get("success") is False, (
@@ -805,10 +841,10 @@ class TestProfanityCleaningUx:
     def test_fail_fast_backend_unreachable(self, tmp_path):
         """AudioCleaner with unreachable Whisper URL raises AudioCleaningError in <10s.
 
-        Verifies Task 1c: fail-fast backend check raises AudioCleaningError,
-        the existing except handler returns the source file, total_failed is incremented.
+        Verifies Task 1c + DR-1: fail-fast backend check raises AudioCleaningError,
+        total_failed is incremented, caller (move_audio_book_files) must catch.
         """
-        from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner
+        from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner, AudioCleaningError
 
         swears = self._write_swears()
         try:
@@ -821,14 +857,14 @@ class TestProfanityCleaningUx:
                 src = f.name
             try:
                 start = time.monotonic()
-                result = cleaner.process_audio_file(
-                    src, {"title": "Fail Book", "asin": "B0FAIL"}
-                )
+                with pytest.raises(AudioCleaningError, match="unreachable"):
+                    cleaner.process_audio_file(
+                        src, {"title": "Fail Book", "asin": "B0FAIL"}
+                    )
                 elapsed = time.monotonic() - start
             finally:
                 os.remove(src)
 
-            assert result == src, "should fall back to source file on backend down"
             assert elapsed < 10, f"should fail fast (<10s); took {elapsed:.2f}s"
             assert cleaner.total_failed == 1
             assert cleaner.total_processed == 0
@@ -893,9 +929,10 @@ class TestProfanityCleaningUx:
     def test_resume_state_written_on_failure(self, tmp_path):
         """After failed process_audio_file, resume JSON marks ASIN 'failed'.
 
-        Verifies Task 1b: _mark_resume_status writes 'failed' in the except handler.
+        Verifies Task 1b + DR-1: _mark_resume_status writes 'failed' before
+        the AudioCleaningError re-raise; total_failed increments.
         """
-        from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner
+        from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner, AudioCleaningError
 
         swears = self._write_swears()
         try:
@@ -907,13 +944,13 @@ class TestProfanityCleaningUx:
                 f.write(b"fakedata")
                 src = f.name
             try:
-                result = cleaner.process_audio_file(
-                    src, {"title": "Failing Book", "asin": "B0FAIL2"}
-                )
+                with pytest.raises(AudioCleaningError):
+                    cleaner.process_audio_file(
+                        src, {"title": "Failing Book", "asin": "B0FAIL2"}
+                    )
             finally:
                 os.remove(src)
 
-            assert result == src
             assert cleaner.total_failed == 1
 
             resume_path = tmp_path / "profanity_cleaning_resume.json"
