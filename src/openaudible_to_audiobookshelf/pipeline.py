@@ -504,7 +504,8 @@ def step_organize(
 
     if audio_cleaner:
         audio_cleaner.log_statistics()
-        audio_cleaner.cleanup_working_directory()
+        # Per-book cleanup now happens inside process_audio_file() on success.
+        # No batch-level cleanup — in-progress working dirs survive for resume.
 
     cleaning_stats: dict = {}
     if audio_cleaner:
@@ -708,7 +709,8 @@ def main(*args: str):
 
     if audio_cleaner:
         audio_cleaner.log_statistics()
-        audio_cleaner.cleanup_working_directory()
+        # Per-book cleanup now happens inside process_audio_file() on success.
+        # No batch-level cleanup — in-progress working dirs survive for resume.
 
     log_file.close()
 

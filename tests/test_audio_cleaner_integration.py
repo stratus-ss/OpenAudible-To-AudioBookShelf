@@ -65,6 +65,97 @@ class TestAudioCleanerInitialization:
             assert os.path.exists(work_dir)
             assert cleaner.working_dir == Path(work_dir)
 
+
+class TestResumeStateSchema:
+    """Test the extended resume state schema with backward compatibility."""
+
+    def test_old_string_format_still_recognized(self, base_config, mock_log_file):
+        """'done' and 'failed' string entries work as before."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config.working_directory = tmpdir
+            cleaner = AudioCleaner(base_config, mock_log_file)
+            cleaner._resume_state = {"B001": "done", "B002": "failed"}
+            assert cleaner._is_already_processed("B001") is True
+            assert cleaner._is_already_processed("B002") is False
+            assert cleaner._is_already_processed("B003") is False
+
+    def test_new_object_format_done_status(self, base_config, mock_log_file):
+        """Object entry with status 'done' is recognized."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config.working_directory = tmpdir
+            cleaner = AudioCleaner(base_config, mock_log_file)
+            cleaner._resume_state = {"B001": {"status": "done", "working_dir": "/tmp/B001"}}
+            assert cleaner._is_already_processed("B001") is True
+
+    def test_in_progress_not_considered_done(self, base_config, mock_log_file):
+        """in_progress entry is NOT 'already processed'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config.working_directory = tmpdir
+            cleaner = AudioCleaner(base_config, mock_log_file)
+            cleaner._resume_state = {"B001": {"status": "in_progress", "working_dir": "/tmp/B001"}}
+            assert cleaner._is_already_processed("B001") is False
+
+    def test_mark_resume_status_string_format(self, base_config, mock_log_file):
+        """_mark_resume_status without working_dir writes old string format."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config.working_directory = tmpdir
+            cleaner = AudioCleaner(base_config, mock_log_file)
+            cleaner._mark_resume_status("B001", "done")
+            assert cleaner._resume_state["B001"] == "done"
+
+    def test_mark_resume_status_object_format(self, base_config, mock_log_file):
+        """_mark_resume_status with working_dir writes object format."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config.working_directory = tmpdir
+            cleaner = AudioCleaner(base_config, mock_log_file)
+            cleaner._mark_resume_status("B001", "in_progress", working_dir="/tmp/B001")
+            assert cleaner._resume_state["B001"] == {"status": "in_progress", "working_dir": "/tmp/B001"}
+
+    def test_mark_resume_status_in_progress_requires_working_dir(self, base_config, mock_log_file):
+        """_mark_resume_status raises ValueError for in_progress without working_dir."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config.working_directory = tmpdir
+            cleaner = AudioCleaner(base_config, mock_log_file)
+            with pytest.raises(ValueError, match="working_dir is required"):
+                cleaner._mark_resume_status("B001", "in_progress")
+
+    def test_is_resumable_valid_working_dir(self, base_config, mock_log_file):
+        """Valid working dir with chunks passes validation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config.working_directory = tmpdir
+            cleaner = AudioCleaner(base_config, mock_log_file)
+            book_dir = Path(tmpdir) / "B001"
+            book_dir.mkdir()
+            cleaner._resume_state = {"B001": {"status": "in_progress", "working_dir": str(book_dir)}}
+            with patch.object(cleaner, '_validate_working_dir', return_value=True):
+                is_resumable, wd = cleaner._is_resumable("B001")
+                assert is_resumable is True
+                assert wd == str(book_dir)
+
+    def test_is_resumable_missing_dir(self, base_config, mock_log_file):
+        """Missing working dir returns not resumable and resets entry."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config.working_directory = tmpdir
+            cleaner = AudioCleaner(base_config, mock_log_file)
+            cleaner._resume_state = {"B001": {"status": "in_progress", "working_dir": "/nonexistent/B001"}}
+            is_resumable, wd = cleaner._is_resumable("B001")
+            assert is_resumable is False
+            assert wd == ""
+            assert cleaner._resume_state["B001"] == "failed"
+
+    def test_cleanup_book_working_dir(self, base_config, mock_log_file):
+        """_cleanup_book_working_dir removes the ASIN's subdirectory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config.working_directory = tmpdir
+            cleaner = AudioCleaner(base_config, mock_log_file)
+            book_dir = Path(tmpdir) / "B001"
+            book_dir.mkdir()
+            (book_dir / "some_file.txt").write_text("data")
+            assert book_dir.exists()
+            cleaner._cleanup_book_working_dir("B001")
+            assert not book_dir.exists()
+
+
 class TestSetupOutputPaths:
     """Test _setup_output_paths method."""
 
