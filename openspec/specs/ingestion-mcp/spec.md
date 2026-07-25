@@ -446,3 +446,61 @@ to enable concurrent progress polling.
 - WHEN `get_job_result(job_id)` is called with the pre-restart `job_id`
 - THEN it returns `{"error": "Unknown job", "job_id": str}`
 - AND does NOT crash
+
+# ingestion-mcp delta — profanity-cleaning-resume
+
+## ADDED Requirements
+
+### Requirement: Resume survives MCP service restart and host reboot
+The MCP service SHALL persist per-book profanity cleaning resume state on
+durable disk storage so that re-invoking `organize_books` after an MCP
+service restart, host reboot, or process crash resumes from completed chunks
+rather than re-transcribing the entire book.
+
+#### Scenario: in_progress state survives MCP restart
+- GIVEN `organize_books` was running and crashed before completion
+- AND the on-disk resume JSON has `{"B0X": {"status": "in_progress", "working_dir": "..."}}`
+- WHEN the MCP service is restarted via `systemctl restart audiobook-ingestion-mcp`
+- AND `organize_books` is called again for the same batch
+- THEN the second invocation sees the existing `in_progress` entry
+- AND `_is_resumable("B0X")` returns `(True, working_dir)` after validation
+- AND only unprocessed chunks are sent to the Whisper backend
+
+#### Scenario: Working directory default is outside /tmp
+- GIVEN a fresh deployment with no `WORKING_DIRECTORY` env var
+- WHEN `get_status()` reports the current configuration
+- AND the audio cleaner initializes
+- THEN the working directory is `~/.cache/monkeyplug-cleaning` (or its
+  configured override)
+- AND it is NOT under `/tmp` or `/var/tmp`
+- AND resume JSON inherits the same durable parent path
+
+#### Scenario: organize_books recovers after crash
+- GIVEN a previous `organize_books` invocation was interrupted mid-book
+- AND the resume JSON has an `in_progress` entry with valid working_dir
+- WHEN a new `organize_books` call is made
+- THEN the new job's response (via `get_job_result`) eventually reports
+  the book as `done` in the `cleaning` aggregate
+- AND `total_failed` is NOT incremented for that book (only for genuine
+  fresh failures)
+
+### Requirement: Cleaning failures preserve partial chunks
+When profanity cleaning fails for a book, the MCP layer SHALL report the
+failure via `cleaning_failures` AND leave the resume state as `in_progress`
+(rather than `"failed"`) so that subsequent invocations can retry from the
+existing partial chunks.
+
+#### Scenario: cleaning_failures entry for genuine error
+- GIVEN profanity cleaning is enabled
+- AND a book fails for a non-recoverable reason (e.g. malformed audio)
+- WHEN `organize_books` completes
+- THEN `cleaning_failures` includes `{asin, title, error}` for that book
+- AND the resume JSON retains the entry as `in_progress` with working_dir
+- AND the per-book working directory is NOT deleted (allows future manual retry)
+
+#### Scenario: cleaning stats reflect only successful books
+- GIVEN some books succeed and some fail during `organize_books`
+- WHEN `get_job_result` returns the result
+- THEN `cleaning.total_cleaned` equals the number of fully-completed books
+- AND `cleaning.total_failed` equals the number of fresh failures
+- AND `cleaning.total_profanities` is the cumulative count across successful books

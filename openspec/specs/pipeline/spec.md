@@ -130,3 +130,111 @@ The system SHALL return structured error dicts when pipeline steps encounter fai
 - AND the batch continues to process remaining books
 - AND the result includes a `cleaning` aggregate with `total_cleaned`,
   `total_failed`, `total_profanities` integer counters
+
+# pipeline delta — profanity-cleaning-resume
+
+## ADDED Requirements
+
+### Requirement: AudioCleaner per-book resume across crashes
+The system SHALL preserve per-book working directory contents and resume JSON
+across MCP server restarts, host reboots, and process crashes, so that
+re-invoking `organize_books` for the same batch resumes from completed chunks
+rather than re-transcribing the entire book.
+
+#### Scenario: AudioCleaner marks in_progress before heavy work
+- GIVEN profanity cleaning is enabled
+- AND `process_audio_file()` is called for an ASIN that is not already processed
+- WHEN the method enters its main try block
+- THEN it writes `{"B01N0NKMIG": {"status": "in_progress", "working_dir": "<path>"}}`
+  to the resume JSON BEFORE invoking the MonkeyPlug encoder
+- AND the resume JSON lives at `<working_dir>.parent / profanity_cleaning_resume.json`
+
+#### Scenario: Resume JSON survives MCP service restart
+- GIVEN a job is running and has marked an ASIN as `in_progress`
+- WHEN the MCP service is restarted (e.g., `systemctl restart audiobook-ingestion-mcp`)
+- THEN the on-disk resume JSON retains the `in_progress` entry
+- AND `working_dir` still points to a directory with partial chunks and transcripts
+- AND the resume JSON lives outside `/tmp` so it survives reboots
+
+#### Scenario: Re-invoking organize_books resumes from existing chunks
+- GIVEN a resume JSON with `{"B01N0NKMIG": {"status": "in_progress", "working_dir": "..."}}`
+- AND the working directory contains partial chunk files
+- WHEN `organize_books` is called again
+- THEN MonkeyPlug's `AudioChunker` detects existing chunk files
+- AND only processes chunks that have no existing chunk + transcript pair
+- AND already-completed chunks are NOT re-transcribed
+
+#### Scenario: AudioCleaner cleans up working dir on success
+- GIVEN profanity cleaning completes successfully for a book
+- WHEN `process_audio_file()` finishes
+- THEN the resume JSON entry for that ASIN is set to `"done"` (legacy string format)
+- AND the per-book subdirectory `<working_dir>/<asin>/` is removed via `shutil.rmtree`
+- AND the cleaned audio file is copied to the ABS destination
+
+#### Scenario: AudioCleaner preserves partial chunks on failure
+- GIVEN profanity cleaning fails for a book mid-processing
+- WHEN the exception handler runs
+- THEN the resume JSON entry is written as
+  `{"status": "in_progress", "working_dir": "<path>"}`
+- AND the per-book working directory is NOT removed (chunks + transcripts survive)
+- AND the failure is reported via `cleaning_failures` for the batch
+
+### Requirement: Working directory must be durable
+The `working_directory` configuration value MUST be on persistent storage
+(not in `/tmp` or any other volatile path) so that resume state survives
+host reboots. The system SHALL default `working_directory` to
+`~/.cache/monkeyplug-cleaning` (XDG cache convention) when not explicitly set.
+
+#### Scenario: Default working directory is durable
+- GIVEN no `WORKING_DIRECTORY` environment variable is set
+- WHEN the pipeline constructs its `Config`
+- THEN `config.working_directory` resolves to `<home>/.cache/monkeyplug-cleaning`
+- AND the directory is created on `AudioCleaner` init if missing
+
+#### Scenario: /tmp is not used for working directory
+- GIVEN the default configuration
+- WHEN `config.working_directory` is inspected
+- THEN it does NOT begin with `/tmp` or `/var/tmp`
+- AND the resume JSON (`<working_directory>.parent / profanity_cleaning_resume.json`)
+  is also outside `/tmp`
+
+### Requirement: AudioCleaner validates working dir before trusting it
+When a resume JSON entry says `in_progress`, the system SHALL validate the
+referenced working directory before trusting its contents. Validation checks:
+(1) the directory exists, (2) at least one chunk audio file is present,
+(3) all chunks are non-empty, (4) all paired transcript JSONs parse as non-empty
+word lists, (5) the first chunk parses via `ffprobe`.
+
+#### Scenario: Valid working dir is trusted
+- GIVEN a resume entry with `status: "in_progress"` and a valid working dir
+- WHEN `_is_resumable(asin)` is called
+- THEN it returns `(True, working_dir)`
+- AND processing resumes using the existing artifacts
+
+#### Scenario: Stale or corrupt working dir is reset
+- GIVEN a resume entry with `status: "in_progress"`
+- AND the working directory is missing or contains corrupt artifacts
+  (zero-byte chunks, unparseable transcripts, ffprobe failure)
+- WHEN `_is_resumable(asin)` is called
+- THEN it removes the corrupt directory
+- AND resets the resume entry to `"failed"`
+- AND returns `(False, "")`
+- AND the caller proceeds to clean from scratch
+
+### Requirement: Backward compatibility with legacy resume JSON
+The resume JSON parser SHALL accept BOTH the legacy string format
+(`{"asin": "done"}`) and the new object format
+(`{"asin": {"status": "in_progress", "working_dir": "..."}}`).
+Existing consumers reading legacy entries SHALL continue to work without migration.
+
+#### Scenario: Legacy "done" entry is recognized
+- GIVEN a resume JSON containing `{"B0LEGACY": "done"}`
+- WHEN `_is_already_processed("B0LEGACY")` is called
+- THEN it returns `True`
+- AND `organize_books` skips the book
+
+#### Scenario: Legacy "failed" entry is NOT recognized as done
+- GIVEN a resume JSON containing `{"B0LEGACY": "failed"}`
+- WHEN `_is_already_processed("B0LEGACY")` is called
+- THEN it returns `False`
+- AND the book is re-attempted on the next `organize_books` call
