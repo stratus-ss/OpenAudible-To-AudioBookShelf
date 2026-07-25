@@ -1,6 +1,6 @@
 ---
 name: audiobook-pipeline
-description: "Audiobook ingestion pipeline. ALWAYS read this skill before any audiobook task. Critical: run export_library() before list_library(). Never filter by status=NotLiberated on first search. If a book is Liberated but user wants it in a different library, use set_book_status to unliberate and re-download it. Profanity cleaning survives crashes/restarts: re-running organize_books for an in-progress batch resumes from completed chunks (see 'Resume state' below)."
+description: "Audiobook ingestion pipeline. ALWAYS read this skill before any audiobook task. Critical: run export_library() before list_library(). Never filter by status=NotLiberated on first search. If a book is Liberated but user wants it in a different library, use set_book_status to unliberate and re-download it. Profanity cleaning survives crashes/restarts: re-running organize_books for an in-progress batch resumes from completed chunks (see 'Resume state' below). For long jobs (>10 min) start the job, send ETA, then DISCONNECT — do NOT poll in a loop; user will ask for status (see Async Job Pattern below)."
 allowed_tools:
   - mcp__audiobook-ingestion__list_libraries
   - mcp__audiobook-ingestion__get_status
@@ -39,11 +39,15 @@ allowed_tools:
 <format>
 You produce exactly 2-3 short Telegram messages per request. Nothing else.
 
-Message 1 (required): One short sentence acknowledging the task.
-  Example: "On it -- pulling down those four for the kids library."
+Message 1 (required): One short sentence acknowledging the task. If the work involves profanity cleaning of a long audiobook, include a rough ETA so the user knows what they're in for.
+  Examples:
+    "On it -- pulling down those four for the kids library."
+    "Starting cleaning of Heretical Fishing -- roughly 4 hours, will ping you when done."
 
-Message 2 (optional): One short sentence only if a step takes over 2 minutes or errors.
-  Example: "Downloading -- 2 of 4 done."
+Message 2 (optional, but recommended for cleaning jobs): One short sentence confirming the job started, with the ETA again. Then disconnect.
+  Example: "Cleaning started. ETA ~4 hours. I'll let you know when it's done -- ask anytime for status."
+
+**For long jobs (>10 min), DO NOT poll continuously.** Send Message 2 with the ETA, then END your turn. Do not call `get_job_result` in a loop. The user will ask "what's the status?" when they want an update; that's when you check once and report.
 
 Message 3 (required): Final summary using this exact template:
   Done. N of M added to [library]:
@@ -173,7 +177,7 @@ Two libraries exist: **adult** and **kids**. Always specify `library=`. If the u
 7. Always pass `library="kids"` or `library="adult"` explicitly. Omitting defaults to adult (wrong path).
 8. Extract the ASIN from `list_library` output. Only ask the user if all searches failed.
 9. Always pass `cleanup_files=true` when deleting from ABS. The MCP defaults to DB-only delete; ABS's file watcher (`disableWatcher=false` on both libraries) re-imports the orphaned `.m4b` under a fresh UUID within ~5 seconds -- the tool still reports `success=true`, so the failure only surfaces when the user reopens the UI.
-10. When `enable_profanity_cleaning=true`, `organize_books` returns in **~4ms** with a `job_id`. Do NOT assume the work is done — poll `get_job_result(job_id)` for the final response. The full `moved[]` / `cleaning_failures[]` / `cleaning` counters live in `get_job_result`'s `result` field, not in the immediate return.
+10. When `enable_profanity_cleaning=true`, `organize_books` returns in **~4ms** with a `job_id`. Do NOT poll continuously — see "Async Job Pattern" below for the disconnect-and-recheck pattern.
 
 ## Worked Example -- Chrysalis Book 4 to Kids Library
 
@@ -254,25 +258,43 @@ limit and auto-restart as a second line of defense.
 
 `organize_books` and `ingest_books` use an **async job pattern** (DR-6). They return immediately with a job handle; the actual work runs in a background thread.
 
+**The disconnect-and-recheck pattern (saves tokens):**
+
 ```
-1. Call organize_books(library="adult", enable_profanity_cleaning=true, ...)
+1. Estimate the job duration from the book(s) involved.
+   - Without cleaning: seconds to a minute per book (just file move).
+   - With cleaning: ~8 min per hour of audio (e.g. 5-hour book = ~40 min;
+     30-hour book = ~4 hours). Compute from book length if known, or
+     round up conservatively.
+
+2. Call organize_books(library="...", enable_profanity_cleaning=true, ...)
    → returns {"job_id": "abc123def456", "status": "started"} in ~4ms
 
-2. Poll get_cleaning_progress() for per-book/per-stage progress (free, fast — 2–5ms each).
-   Use it to display "Cleaning — 2 of 5 done" updates in your optional Message 2.
+3. Send Message 2 to Telegram with the ETA, then END YOUR TURN.
+   Example: "Cleaning started. ETA ~40 min. I'll let you know when it's
+   done -- ask anytime for status."
 
-3. Poll get_job_result(job_id="abc123def456") to check completion.
+4. DO NOT poll continuously. Don't call get_job_result in a loop.
+   Wait for the user to ask "what's the status?" or "is it done?".
+
+5. When the user asks, call get_job_result(job_id="...") ONCE.
    While running: {"status": "running", "job_id": "..."}
    On completion: {"status": "completed", "job_id": "...", "result": {...}}
-
-4. Extract the full response from get_job_result's `result` field.
-   The `result` dict matches the previous synchronous organize_books schema
-   (moved[], cleaning_failures[], cleaning{total_cleaned,total_failed,total_profanities}, etc.).
+   Extract the full response from `result` field
+   (moved[], cleaning_failures[], cleaning{total_cleaned,total_failed,total_profanities}).
 ```
+
+**Why disconnect?** Continuous polling burns tokens on every turn for jobs that take minutes-to-hours. The user knows it's running; they ask when they want an update. One-shot status check when prompted is the right tradeoff.
 
 **Single-slot guard.** Only one job runs at a time. If a job is already running, `organize_books` returns `{"error": "Job already running", "active_job_id": "<existing>"}` and does NOT start a new one.
 
-**Unknown job after server restart.** If the MCP server restarts mid-job, `get_job_result` returns `{"error": "Unknown job", "job_id": "<old>"}`. Re-invoke `organize_books` to restart the work.
+**Unknown job after server restart.** If the MCP server restarts mid-job, `get_job_result` returns `{"error": "Unknown job", "job_id": "<old>"}`. Re-invoke `organize_books` to restart the work — the on-disk resume JSON picks up where the previous job left off (see Resume state below).
+
+**Estimating ETAs for cleaning:**
+- Use `duration_minutes` from `list_library` (Libation metadata) or `lengthInMinutes` from Audible.
+- Formula: `(duration_minutes / 60) * 8 minutes ≈ cleaning_minutes`. Round up generously.
+- Heretical Fishing Book 1 (~30 hours audio) ≈ 4 hours of cleaning.
+- Single audiobook <1 hour ≈ under 10 min — safe to skip Message 2.
 
 ### Response fields — organize_books (via get_job_result)
 
@@ -318,8 +340,8 @@ Per-book profanity cleaning state survives **MCP service restarts and VM reboots
 | 6 | `organize_books` | `library="target"` | Move into Author/Series/Title tree. |
 | 7 | `scan_audiobookshelf` | `library="target"` | ABS discovers new files. ~20s. |
 | 8 | `match_audiobookshelf` | `library="target"`, `days_ago=1` | Link to Audible metadata. |
-| 8.5 | `get_cleaning_progress` | -- | Poll mid-operation for per-book profanity cleaning progress. Returns JSON with per-ASIN state (processing/transcribing/done/failed/skipped) plus `stage` (staging\|uploading\|transcribing\|done\|failed\|skipped), `books_done`, `books_total` counters. Free to call. Use when `organize_books` or `ingest_books` is invoked with `enable_profanity_cleaning=true` and the operation takes more than 2 minutes. Safe to call concurrently with the long-running job — returns in 2–5ms. |
-| 8.6 | `get_job_result` | `job_id="<id>"` | Poll for the final result of an async `organize_books` or `ingest_books` call. Returns `{"status": "completed", "result": {...}}` when done, `{"status": "running"}` while in progress, or `{"error": "Unknown job"}` if the server restarted mid-job. Free to call. |
+| 8.5 | `get_cleaning_progress` | -- | ONE-SHOT progress check for an in-flight cleaning job. Returns per-ASIN state + `stage` (staging\|uploading\|transcribing\|resuming\|done\|failed\|skipped), `books_done`, `books_total`. **Call only when the user asks for status — not in a polling loop.** Returns in 2–5ms. |
+| 8.6 | `get_job_result` | `job_id="<id>"` | ONE-SHOT check for the final result of an async `organize_books` or `ingest_books` call. Returns `{"status": "completed", "result": {...}}` when done, `{"status": "running"}` while in progress, or `{"error": "Unknown job"}` if the server restarted mid-job. **Call only when the user asks for status — not in a polling loop.** Free. |
 | 9 | `delete_library_items` | `library=`, `item_ids=[...]`, **`cleanup_files=true`** | DB-only delete leaves the file on disk; ABS watcher (`disableWatcher=false`) resurrects the entry under a new UUID within seconds. |
 
 ## Troubleshooting
