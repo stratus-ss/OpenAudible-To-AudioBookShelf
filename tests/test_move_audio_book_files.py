@@ -902,10 +902,11 @@ class TestProfanityCleaningUx:
                 os.remove(swears)
 
     def test_resume_state_written_on_failure(self, tmp_path):
-        """After failed process_audio_file, resume JSON marks ASIN 'failed'.
+        """After failed process_audio_file, resume JSON marks ASIN 'in_progress'.
 
-        Verifies Task 1b + DR-1: _mark_resume_status writes 'failed' before
-        the AudioCleaningError re-raise; total_failed increments.
+        Verifies DR-2: failures preserve partial chunks for resume by writing
+        {"status": "in_progress", "working_dir": <path>} instead of "failed".
+        total_failed still increments so callers can surface the error.
         """
         from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner, AudioCleaningError
 
@@ -933,8 +934,15 @@ class TestProfanityCleaningUx:
                 f"resume JSON not written; expected at {resume_path}"
             )
             state = json.loads(resume_path.read_text())
-            assert state.get("B0FAIL2") == "failed", (
-                f"expected B0FAIL2='failed' in resume state; got {state}"
+            entry = state.get("B0FAIL2")
+            assert isinstance(entry, dict), (
+                f"expected B0FAIL2 as object entry; got {entry}"
+            )
+            assert entry.get("status") == "in_progress", (
+                f"expected status='in_progress' (DR-2: resume-friendly); got {entry}"
+            )
+            assert entry.get("working_dir"), (
+                f"expected working_dir to be set; got {entry}"
             )
         finally:
             if os.path.exists(swears):

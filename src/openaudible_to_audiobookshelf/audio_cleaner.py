@@ -10,6 +10,7 @@ import logging
 import os
 import shutil
 import socket
+import subprocess
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
@@ -77,20 +78,172 @@ class AudioCleaner:
     # UTILITY HELPERS
     # ============================================================================
 
-    def _is_already_processed(self, asin: str) -> bool:
-        """Return True if ASIN is in the resume state and marked as done."""
-        return bool(asin) and self._resume_state.get(asin) == "done"
+    def _get_resume_entry(self, asin: str):
+        """Return the raw resume entry for ASIN (string, dict, or None)."""
+        if not asin:
+            return None
+        return self._resume_state.get(asin)
 
-    def _mark_resume_status(self, asin: str, status: str) -> None:
-        """Persist ASIN -> status into the resume JSON file."""
+    def _is_already_processed(self, asin: str) -> bool:
+        """Return True if ASIN is in the resume state and marked as done.
+
+        Accepts both the legacy string format ("done") and the new object format
+        ({"status": "done"}).
+        """
+        entry = self._get_resume_entry(asin)
+        if entry is None:
+            return False
+        if isinstance(entry, str):
+            return entry == "done"
+        if isinstance(entry, dict):
+            return entry.get("status") == "done"
+        return False
+
+    def _is_resumable(self, asin: str) -> tuple:
+        """Return (True, working_dir) if ASIN has an intact in-progress state.
+
+        Validates that:
+        1. The entry exists and is a dict with status="in_progress" and a working_dir.
+        2. The working_dir directory exists on disk.
+        3. The directory contents pass _validate_working_dir() (chunks non-empty,
+           transcripts parse, ffprobe succeeds on first chunk).
+
+        If validation fails (e.g. directory missing or corrupt), the working dir
+        is deleted, the resume entry is reset to "failed", and (False, "") is
+        returned — caller should start fresh.
+
+        Returns (False, "") if the ASIN is absent, has a legacy string entry,
+        has any other status, or validation fails.
+        """
+        entry = self._get_resume_entry(asin)
+        if not isinstance(entry, dict):
+            return (False, "")
+        if entry.get("status") != "in_progress":
+            return (False, "")
+        working_dir = entry.get("working_dir", "")
+        if not working_dir:
+            return (False, "")
+        wd_path = Path(working_dir)
+        if not wd_path.exists():
+            self._log(
+                f"Stale in_progress state for ASIN {asin}: working_dir missing, resetting", "WARNING"
+            )
+            self._mark_resume_status(asin, "failed")
+            return (False, "")
+        if not self._validate_working_dir(asin):
+            self._log(
+                f"Stale in_progress state for ASIN {asin}: working_dir validation failed, resetting", "WARNING"
+            )
+            if wd_path.exists():
+                try:
+                    shutil.rmtree(str(wd_path))
+                except OSError as e:
+                    self._log(f"Failed to remove corrupt working dir for {asin}: {e}", "WARNING")
+            self._mark_resume_status(asin, "failed")
+            return (False, "")
+        return (True, working_dir)
+
+    def _mark_resume_status(self, asin: str, status: str, working_dir: str = None) -> None:
+        """Persist ASIN -> status into the resume JSON file.
+
+        For "done"/"failed" statuses without a working_dir, writes the legacy
+        string format for backward compatibility with existing consumers.
+
+        For "in_progress" status, writes an object {"status", "working_dir"}.
+        Raises ValueError if status="in_progress" is passed without a working_dir.
+        """
         if not asin:
             return
-        self._resume_state[asin] = status
+        if status == "in_progress" and not working_dir:
+            raise ValueError("working_dir is required when status='in_progress'")
+        if working_dir:
+            self._resume_state[asin] = {"status": status, "working_dir": working_dir}
+        else:
+            self._resume_state[asin] = status
         try:
             self.resume_path.parent.mkdir(parents=True, exist_ok=True)
             self.resume_path.write_text(json.dumps(self._resume_state, indent=2))
         except OSError as e:
             self._log(f"Failed to write resume state to {self.resume_path}: {e}", "WARNING")
+
+    def _cleanup_book_working_dir(self, asin: str) -> None:
+        """Remove the working directory for a single book (after successful cleaning).
+
+        The cleaned audio file has already been moved to the destination by the caller,
+        so this only removes the per-book subdirectory containing chunks and transcripts.
+        No-op if the directory does not exist (already cleaned up, or never created).
+        """
+        if not asin:
+            return
+        book_dir = self.working_dir / asin
+        if book_dir.exists():
+            try:
+                shutil.rmtree(str(book_dir))
+                self._log(f"Cleaned up working directory for ASIN {asin}")
+            except OSError as e:
+                self._log(f"Failed to clean up working directory for {asin}: {e}", "WARNING")
+
+    def _validate_working_dir(self, asin: str) -> bool:
+        """Validate that an existing book's working directory is intact for resume.
+
+        Checks:
+        1. The book's subdirectory exists.
+        2. All chunk audio files (.m4b/.mp3) are non-empty.
+        3. All paired transcript JSONs are valid JSON with non-empty word lists.
+        4. At least one chunk audio file is parseable by ffprobe (catches truncated writes).
+
+        Returns True only if every check passes. Used by _is_resumable to decide
+        whether to trust existing artifacts or discard them.
+        """
+        if not asin:
+            return False
+        book_dir = self.working_dir / asin
+        if not book_dir.exists():
+            return False
+
+        chunk_files = [
+            p for p in book_dir.rglob("*_chunk_*.*")
+            if p.is_file()
+            and p.suffix.lower() not in (".json",)
+            and not p.name.endswith("_transcript.json")
+        ]
+        if not chunk_files:
+            return False
+
+        for chunk in chunk_files:
+            if chunk.stat().st_size == 0:
+                return False
+
+        for chunk in chunk_files:
+            transcript = chunk.with_name(chunk.name + "_transcript.json")
+            if transcript.exists():
+                try:
+                    data = json.loads(transcript.read_text())
+                except (json.JSONDecodeError, OSError):
+                    return False
+                if not isinstance(data, list) or not data:
+                    return False
+                if not isinstance(data[0], dict) or "word" not in data[0]:
+                    return False
+
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+                 "-of", "csv=p=0", str(chunk_files[0])],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return False
+            try:
+                duration = float(result.stdout.strip())
+            except ValueError:
+                return False
+            if duration <= 0:
+                return False
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+
+        return True
 
     def _fire_progress(self, **data) -> None:
         """Forward progress events to the configured callback (if any)."""
@@ -149,6 +302,19 @@ class AudioCleaner:
                 stage="staging", books_done=self.total_processed, books_total=self._book_count,
             )
             self._log_start_header(book_title)
+
+            if asin:
+                is_resumable, resume_wd = self._is_resumable(asin)
+                if is_resumable:
+                    self._log(f"Resuming ASIN {asin} from working dir: {resume_wd}")
+                    self._fire_progress(
+                        asin=asin, book_title=book_title, status="processing",
+                        stage="resuming", books_done=self.total_processed, books_total=self._book_count,
+                    )
+
+            if asin:
+                book_wd = str(self.working_dir / asin)
+                self._mark_resume_status(asin, "in_progress", working_dir=book_wd)
 
             if self.config.remote_whisper_url:
                 try:
@@ -212,6 +378,7 @@ class AudioCleaner:
 
             self.total_processed += 1
             self._mark_resume_status(asin, "done")
+            self._cleanup_book_working_dir(asin)
             self._fire_progress(
                 asin=asin, book_title=book_title, status="done",
                 stage="done",
@@ -225,7 +392,8 @@ class AudioCleaner:
             title = book_data.get("title", "Unknown")
             asin_fail = book_data.get("asin", "")
             self._log(f"Processing failed for {title}: {e}", "ERROR")
-            self._mark_resume_status(asin_fail, "failed")
+            book_wd_fail = str(self.working_dir / asin_fail) if asin_fail else None
+            self._mark_resume_status(asin_fail, "in_progress", working_dir=book_wd_fail)
             self._fire_progress(
                 asin=asin_fail, book_title=title, status="failed",
                 stage="failed", error=str(e),
