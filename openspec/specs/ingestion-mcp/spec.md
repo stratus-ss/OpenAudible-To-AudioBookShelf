@@ -1,7 +1,7 @@
 # Ingestion-MCP Specification
 
 ## Purpose
-The ingestion-MCP capability is the FastMCP server (`abs-mcp/mcp_server.py`, `abs-mcp/podcast_tools.py`) that exposes the audiobook and podcast ingestion pipeline as Model Context Protocol tools. It resolves library registry entries, builds a `Config` from per-call parameters, calls the same pipeline steps as the CLI, and provides ABS REST client helpers for library introspection, item search, and podcast episode management.
+The ingestion-MCP capability is the FastMCP server (`abs_mcp/mcp_server.py`, `abs_mcp/podcast_tools.py`) that exposes the audiobook and podcast ingestion pipeline as Model Context Protocol tools. It resolves library registry entries, builds a `Config` from per-call parameters, calls the same pipeline steps as the CLI, and provides ABS REST client helpers for library introspection, item search, and podcast episode management.
 
 ## Requirements
 
