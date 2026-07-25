@@ -242,6 +242,13 @@ Measured on 2026-07-24 against the production Whisper backend (RTX 5060 Ti, `tin
 
 ETA formula: `(elapsed_sec / books_done) * (books_total - books_done)`. If `books_done == 0`, ETA is null. Measured accuracy: **±3%** on 3-book batch (within the ±25% design tolerance).
 
+### Backend params
+The MCP explicitly disables diarization and VAD on the Whisper backend by
+passing `remoteParams={"is_diarize": "false", "vad_filter": "false", "lang": "en"}`
+on every transcription upload. This prevents the 40 GiB OOM caused by pyannote
+diarization on audiobook-length files. The container also has a 16 GiB memory
+limit and auto-restart as a second line of defense.
+
 ## Async Job Pattern (organize_books / ingest_books)
 
 `organize_books` and `ingest_books` use an **async job pattern** (DR-6). They return immediately with a job handle; the actual work runs in a background thread.
