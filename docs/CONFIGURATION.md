@@ -10,7 +10,7 @@ Complete reference for CLI flags, environment variables, and AudioBookShelf API 
   - Libation must be configured for single-file output (`SplitFilesByChapter: false`)
 - **AudioBookShelf** instance with API token
 - **Shared filesystem** between Libation/ABS (NFS mount or local)
-- **Docker (optional):** The MCP server can run as a container instead of on bare metal. The image bundles Libation (CLI + .NET runtime) and the MCP server together. See [abs-mcp/README.md](../abs-mcp/README.md) "Docker Deployment" section for setup. Requires Docker 20.10+ and Docker Compose v2.
+- **Docker (optional):** The MCP server can run as a container instead of on bare metal. The image bundles Libation (CLI + .NET runtime) and the MCP server together. See [abs_mcp/README.md](../abs_mcp/README.md) "Docker Deployment" section for setup. Requires Docker 20.10+ and Docker Compose v2.
 
 ## CLI Options
 
@@ -42,6 +42,8 @@ All options can be passed on the command line or via a YAML file (`--yaml-argume
 | `--purchased-how-long-ago` | `7` | Days of history to process |
 | `--copy-instead-of-move` | `False` | Copy files instead of moving |
 | `--generate-yaml` | `False` | Write YAML instead of running |
+| `--enable-profanity-cleaning` | `False` | Run monkeyplug profanity cleaning during organize. Failed books are skipped (absent from `moved`) and reported in `cleaning_failures[]`. Measured: ~8 min per hour of audio on prod Whisper (RTX 5060 Ti, `tiny` model). Requires `REMOTE_WHISPER_URL` env var — fails fast on unreachable. |
+| `--remote-whisper-url` | (env: `REMOTE_WHISPER_URL`) | Whisper-webui backend URL. Used by profanity cleaning. Fails fast on TCP-level unreachable (~5s probe). |
 
 ### Libation-Specific
 
@@ -69,9 +71,11 @@ Run individual steps with `--step`:
 | `scan` | Read and normalize books from JSON |
 | `download` | Download books (OpenAudible only) |
 | `export` | Copy/move audio files to Author/Series/Title structure |
-| `organize` | Restructure directories |
+| `organize` | Restructure directories. When `--enable-profanity-cleaning=true`, each book is run through `audio_cleaner.process_audio_file()` first; failures are caught per-book, recorded in `cleaning_failures[]`, and the batch continues. |
 | `scan-abs` | Trigger AudioBookShelf library rescan |
 | `match` | Match books to Audible metadata in ABS |
+
+**MCP note:** `organize_books` and `ingest_books` (MCP) use the async job pattern -- they return `{"job_id": ..., "status": "started"}` in ~4ms, with the actual work in a background thread. Poll `get_job_result(job_id)` for the final response (which includes `cleaning_failures[]` when profanity cleaning is enabled). See [abs_mcp/README.md](../abs_mcp/README.md) for details.
 
 ## AudioBookShelf API
 
@@ -82,7 +86,16 @@ Run individual steps with `--step`:
 
 ## Environment Variables
 
-No pipeline-specific env vars are required; all config via CLI flags or YAML. `libationcli` must be on PATH for Libation auto-export.
+| Var | Purpose |
+|-----|---------|
+| `REMOTE_WHISPER_URL` | Required when `--enable-profanity-cleaning=true`. URL of the whisper-webui backend (set in `abs_mcp/.env` from your deployment's `${REMOTE_WHISPER_URL}`). Without it, cleaning fails fast with a clear `ValueError` rather than silently moving un-cleaned files. |
+| `MCP_ENV_FILE` | Path to the abs_mcp `.env` file (production: `abs_mcp/.env`). Bundles ABS credentials, library paths, profanity-cleaning config. |
+| `MCP_TRANSPORT` | `streamable-http` (default) or other FastMCP transport. |
+| `MCP_HOST` | Bind host for the MCP server (default: `0.0.0.0`). |
+| `MCP_PORT` | Bind port for the MCP server (default: `8765`; production uses `/sse` path). |
+| `MCP_STREAMABLE_PATH` | HTTP path for streamable transport (default: `/sse`). |
+
+`libationcli` must be on PATH for Libation auto-export.
 
 ## Troubleshooting
 
@@ -102,12 +115,12 @@ Verify `--abs-api-token` is correct and has library scan permissions.
 
 ### MCP server won't start
 
-**Bare-metal:** Ensure `libationcli` is on PATH. MCP requires Libation (not OpenAudible). Check `abs-mcp/mcp_server.py` dependencies: `pip install -r requirements.txt` in the abs-mcp context.
+**Bare-metal:** Ensure `libationcli` is on PATH. MCP requires Libation (not OpenAudible). Check `abs_mcp/mcp_server.py` dependencies: `pip install -r requirements.txt` in the abs_mcp context.
 
 **Docker container:**
 
 1. **Container logs:** `docker logs audiobook-ingestion-mcp` — look for Python import errors, missing files, or ABS connection failures.
-2. **Volume mounts:** `docker inspect audiobook-ingestion-mcp | jq '.[0].Mounts'` — verify `.env` and `libraries.yaml` are mounted at `/app/abs-mcp/` and that the Libation config and books directories are mounted at `/config` and `/data` respectively.
+2. **Volume mounts:** `docker inspect audiobook-ingestion-mcp | jq '.[0].Mounts'` — verify `.env` and `libraries.yaml` are mounted at `/app/abs_mcp/` and that the Libation config and books directories are mounted at `/config` and `/data` respectively.
 3. **libationcli inside container:** `docker exec audiobook-ingestion-mcp /libation/LibationCli --version` — should print the Libation version. If missing, the image was built without the Libation base layer.
 4. **NFS mounts:** if the ABS audiobooks directory is on a remote server, confirm the NFS mount is established on the host BEFORE the container starts. Inside the container, run `df -h` to see mounted filesystems.
 5. **Environment:** `docker exec audiobook-ingestion-mcp env | grep -E "MCP_|LIBATION_|ABS_"` — verify `MCP_ENV_FILE`, `LIBATION_CLI`, and `LIBATION_FILES_DIR` are set correctly.
@@ -119,4 +132,4 @@ Verify `--abs-api-token` is correct and has library scan permissions.
 - [ARCHITECTURE.md](ARCHITECTURE.md) -- Module map
 - [CODEFLOW.md](CODEFLOW.md) -- Runtime flows
 - [AGENTS.md](AGENTS.md) -- AI agent rules, MCP usage, deployment options
-- [abs-mcp/README.md](../abs-mcp/README.md) -- MCP server setup, tools, and Docker deployment
+- [abs_mcp/README.md](../abs_mcp/README.md) -- MCP server setup, tools, and Docker deployment

@@ -36,19 +36,21 @@ Pipeline steps: `scan` → `download` → `export` → `organize` → `scan-abs`
 
 ## 2. Export and Organize
 
-`process_open_audible_book_json` and `process_libation_book_json` normalize book metadata into a common format, then `move_audio_book_files` / `make_directory_structure` write to the filesystem.
+`process_open_audible_book_json` and `process_libation_book_json` normalize book metadata into a common format, then `move_audio_book_files` / `make_directory_structure` write to the filesystem. When `enable_profanity_cleaning=true`, `move_audio_book_files` calls `audio_cleaner.process_audio_file()` on each book first; failures raise `AudioCleaningError`, are caught at the per-book boundary, and recorded in `cleaning_failures[]`.
 
 ```mermaid
 flowchart TD
     OA["OpenAudible books.json"] --> NORM1["process_open_audible_book_json\n→ standardized dict"]
     LIB["Libation libation.json"] --> NORM2["process_libation_book_json\n→ standardized dict"]
-    
+
     NORM1 --> STRUCT["make_directory_structure\nAuthor / Series / Title"]
     NORM2 --> STRUCT
-    STRUCT --> DISK["Destination dir\nAuthor/Series/Title/"]
-    
-    NORM1 --> FILE["move_audio_book_files\ncopy or move .m4b"]
-    NORM2 --> FILE
+    STRUCT --> CLEAN{"enable_profanity_cleaning?"}
+    CLEAN -- "yes" --> CLEAN2["audio_cleaner.process_audio_file()\nstaging → uploading → transcribing → done"]
+    CLEAN2 -- "AudioCleaningError" --> FAIL["caught at boundary\nappended to cleaning_failures[]\nskip to next book"]
+    CLEAN2 -- "ok" --> FILE["move_audio_book_files\ncopy or move .m4b"]
+    CLEAN -- "no" --> FILE
+    FILE --> DISK["Destination dir\nAuthor/Series/Title/"]
 ```
 
 OpenAudible and Libation have different JSON schemas -- the two `process_*` functions map each to the same internal dict shape.
@@ -80,14 +82,14 @@ sequenceDiagram
 
 ## 4. MCP Bridge
 
-The `abs-mcp/mcp_server.py` FastMCP server exposes 20+ pipeline tools for AI agents. It imports `openaudible_to_audiobookshelf.*` modules and the abs-mcp helper modules (`_mcp_bridge.py`, `library_parser.py`, `tool_metrics.py`) directly. For the full tool list with parameters, see [abs-mcp/README.md](../abs-mcp/README.md).
+The `abs_mcp/mcp_server.py` FastMCP server exposes 20+ pipeline tools for AI agents. It imports `openaudible_to_audiobookshelf.*` modules and the abs_mcp helper modules (`_mcp_bridge.py`, `library_parser.py`, `tool_metrics.py`) directly. For the full tool list with parameters, see [abs_mcp/README.md](../abs_mcp/README.md).
 
 ```mermaid
 flowchart LR
-    MCP["abs-mcp/mcp_server.py\nFastMCP tools (20+)"]
-    BRIDGE["abs-mcp/_mcp_bridge.py\nMCP bridge layer"]
-    METRICS["abs-mcp/tool_metrics.py\nResponse efficiency"]
-    PAR["abs-mcp/library_parser.py\nLibrary JSON parsing"]
+    MCP["abs_mcp/mcp_server.py\nFastMCP tools (20+)"]
+    BRIDGE["abs_mcp/_mcp_bridge.py\nMCP bridge layer"]
+    METRICS["abs_mcp/tool_metrics.py\nResponse efficiency"]
+    PAR["abs_mcp/library_parser.py\nLibrary JSON parsing"]
     MOD["src/openaudible_to_audiobookshelf/\naudio_bookshelf, utils, config, audio_cleaner"]
     
     MCP --> BRIDGE
@@ -104,8 +106,37 @@ Tool categories:
 - **Library management:** `delete_library_items`
 - **Podcasts:** `search_podcasts`, `add_podcast`, `list_podcasts`, `get_podcast_episodes`, `download_podcast_episodes`, `fetch_podcast_feed`, `download_podcast_files`
 - **Metrics:** `get_tool_metrics`, `query_tool_metrics_history`
+- **Profanity cleaning:** `get_cleaning_progress` (per-book stage + counters), `get_job_result` (final async job payload — DR-6)
 
-MCP server supports Libation only (not OpenAudible). For Docker deployment (combined Libation + MCP image), see [abs-mcp/README.md](../abs-mcp/README.md) "Docker Deployment" section.
+### Async job pattern (DR-6)
+
+`organize_books` and `ingest_books` are async MCP tools:
+
+```mermaid
+sequenceDiagram
+    participant A as AI Agent
+    participant M as abs_mcp/mcp_server.py
+    participant T as Background Thread (asyncio.to_thread)
+    A->>M: organize_books(...)
+    M-->>A: {"job_id": "abc123", "status": "started"} (in ~4ms)
+    par concurrent progress polling
+        A->>M: get_cleaning_progress()
+        M-->>A: {stage: "transcribing", books_done: 1, books_total: 3, ...}
+    and job result polling
+        loop until completed
+            A->>M: get_job_result("abc123")
+            M-->>A: {"status": "running"}
+        end
+        A->>M: get_job_result("abc123")
+        M-->>A: {"status": "completed", "result": {moved[], cleaning_failures[], cleaning{...}}}
+    end
+    M->>T: dispatch
+    T-->>M: result captured in module-level _active_job dict
+```
+
+The single-slot guard makes a second concurrent `organize_books` return `{"error": "Job already running", "active_job_id": "..."}`. If the server restarts mid-job, `get_job_result` returns `{"error": "Unknown job"}` and the caller should re-invoke `organize_books`.
+
+MCP server supports Libation only (not OpenAudible). For Docker deployment (combined Libation + MCP image), see [abs_mcp/README.md](../abs_mcp/README.md) "Docker Deployment" section.
 
 ---
 
@@ -119,10 +150,10 @@ MCP server supports Libation only (not OpenAudible). For Docker deployment (comb
 | `src/openaudible_to_audiobookshelf/audio_cleaner.py` | Post-processing / profanity cleaning |
 | `src/openaudible_to_audiobookshelf/utils.py` | Path helpers, libation export, directory structure |
 | `src/openaudible_to_audiobookshelf/search_ai.py` | Optional AI-assisted search |
-| `abs-mcp/mcp_server.py` | FastMCP server with 20+ pipeline tools |
-| `abs-mcp/_mcp_bridge.py` | Bridge layer between FastMCP tool wrappers and the parent package |
-| `abs-mcp/tool_metrics.py` | Response efficiency tracking (in-memory + JSONL persistence) |
-| `abs-mcp/library_parser.py` | Library metadata parsing for MCP tools |
+| `abs_mcp/mcp_server.py` | FastMCP server with 20+ pipeline tools |
+| `abs_mcp/_mcp_bridge.py` | Bridge layer between FastMCP tool wrappers and the parent package |
+| `abs_mcp/tool_metrics.py` | Response efficiency tracking (in-memory + JSONL persistence) |
+| `abs_mcp/library_parser.py` | Library metadata parsing for MCP tools |
 
 ## Test Coverage
 

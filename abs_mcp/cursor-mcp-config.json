@@ -1,7 +1,7 @@
 {
   "audiobook-ingestion": {
     "command": "/path/to/OpenAudible-To-AudioBookShelf/venv/bin/python",
-    "args": ["abs-mcp/mcp_server.py"],
+    "args": ["abs_mcp/mcp_server.py"],
     "cwd": "/path/to/OpenAudible-To-AudioBookShelf",
     "env": {
       "MCP_TRANSPORT": "stdio"

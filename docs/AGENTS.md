@@ -2,12 +2,12 @@
 
 ## Project Overview
 
-OpenAudible-To-AudioBookShelf (renaming to Import-To-AudioBookShelf) moves audiobook files from OpenAudible or Libation to an AudioBookShelf server. The CLI runs discrete steps: `scan` → `download` → `export` → `organize` → `scan-abs` → `match`. An optional `abs-mcp/` FastMCP server exposes pipeline tools for AI agents.
+OpenAudible-To-AudioBookShelf (renaming to Import-To-AudioBookShelf) moves audiobook files from OpenAudible or Libation to an AudioBookShelf server. The CLI runs discrete steps: `scan` → `download` → `export` → `organize` → `scan-abs` → `match`. An optional `abs_mcp/` FastMCP server exposes pipeline tools for AI agents.
 
 - **Language:** Python 3.12+
 - **Entry:** `openaudible-to-abs` CLI or `python -m openaudible_to_audiobookshelf`
 - **Key modules:** `src/openaudible_to_audiobookshelf/config.py`, `src/openaudible_to_audiobookshelf/audio_bookshelf.py`, `src/openaudible_to_audiobookshelf/utils.py`, `src/openaudible_to_audiobookshelf/audio_cleaner.py`
-- **MCP:** `abs-mcp/mcp_server.py` (entry), `abs-mcp/_mcp_bridge.py` (bridge), `abs-mcp/tool_metrics.py` (response-efficiency tracking), `abs-mcp/library_parser.py` (parser-first lookups) -- Libation only (not OpenAudible)
+- **MCP:** `abs_mcp/mcp_server.py` (entry), `abs_mcp/_mcp_bridge.py` (bridge), `abs_mcp/tool_metrics.py` (response-efficiency tracking), `abs_mcp/library_parser.py` (parser-first lookups) -- Libation only (not OpenAudible)
 - **Tests:** `tests/`
 
 ## Commands
@@ -23,7 +23,7 @@ openaudible-to-abs --server-url "http://abs.example.com" --abs-api-token "TOKEN"
 openaudible-to-abs --step scan-abs --server-url "http://abs.example.com" --abs-api-token "TOKEN"
 
 # MCP server, bare-metal (Libation only)
-cd abs-mcp && python mcp_server.py
+cd abs_mcp && python mcp_server.py
 
 # MCP server, container (Libation bundled in image)
 docker pull ghcr.io/stratus-ss/mcps/audiobook-ingestion-mcp:latest
@@ -48,13 +48,13 @@ The project has two equivalent deployment paths. Choose based on your constraint
 
 Both paths expose the same MCP tools and read the same `libraries.yaml` / `.env` files. The container path does NOT require modifying any code -- the image uses the same `MCP_ENV_FILE` env var and `LIBATION_CLI=/libation/LibationCli` setting.
 
-For full setup instructions, see [abs-mcp/README.md](../abs-mcp/README.md) Step 5c (container) or Steps 1-6 (bare-metal).
+For full setup instructions, see [abs_mcp/README.md](../abs_mcp/README.md) Step 5c (container) or Steps 1-6 (bare-metal).
 
 ## Scope
 
 Agents may:
 - Edit `src/openaudible_to_audiobookshelf/*.py` with verified test evidence
-- Update `abs-mcp/mcp_server.py` or `library_parser.py`
+- Update `abs_mcp/mcp_server.py` or `library_parser.py`
 - Fix config parsing or path handling
 - Add YAML argument support
 
@@ -74,17 +74,33 @@ Agents may:
 
 ## MCP Usage
 
-The MCP server (`abs-mcp/mcp_server.py`) exposes 20+ pipeline tools for AI agents. For the full tool list with parameters, see [abs-mcp/README.md](../abs-mcp/README.md). Tool categories:
+The MCP server (`abs_mcp/mcp_server.py`) exposes 27+ pipeline tools for AI agents. For the full tool list with parameters, see [abs_mcp/README.md](../abs_mcp/README.md). Tool categories:
 
 - **Discovery & status:** `list_libraries`, `get_status`, `list_library`, `list_abs_library`, `search_abs_library`, `get_source_status`
 - **Ingestion pipeline:** `scan_audible`, `download_books`, `export_library`, `organize_books`, `scan_audiobookshelf`, `match_audiobookshelf`, `ingest_books` (all-in-one), `set_book_status`
 - **Library management:** `delete_library_items`
 - **Podcasts:** `search_podcasts`, `add_podcast`, `list_podcasts`, `get_podcast_episodes`, `download_podcast_episodes`, `fetch_podcast_feed`, `download_podcast_files`
 - **Metrics:** `get_tool_metrics`, `query_tool_metrics_history`
+- **Profanity cleaning:** `get_cleaning_progress`, `get_job_result` (DR-6)
 
-For Docker deployment of the MCP server (combined Libation + MCP image), see [abs-mcp/README.md](../abs-mcp/README.md) "Docker Deployment" section. See "Deployment Options" above for the full Python-vs-Container comparison.
+For Docker deployment of the MCP server (combined Libation + MCP image), see [abs_mcp/README.md](../abs_mcp/README.md) "Docker Deployment" section. See "Deployment Options" above for the full Python-vs-Container comparison.
 
 MCP requires Libation (not OpenAudible) due to Libation's `libationcli` CLI automation.
+
+### Long-running tools use the async job pattern (DR-6)
+
+`organize_books` and `ingest_books` return immediately with a job handle (in ~4ms), then run the actual work in a background thread. Callers poll for completion:
+
+```
+1. organize_books(...)
+   → {"job_id": "abc123", "status": "started"}
+
+2. poll get_cleaning_progress()     # free, 2–5ms each, safe concurrently
+3. poll get_job_result(job_id)      # until {"status": "completed", "result": {...}}
+   use the `result` field as the previous synchronous response
+```
+
+The full response (including `cleaning_failures[]` and `cleaning{...}` aggregate) lives in `get_job_result`'s `result` field — not in the immediate return. Single-slot guard: if a job is running, `organize_books` returns `{"error": "Job already running", "active_job_id": "..."}`. If `get_job_result` returns `{"error": "Unknown job"}`, the server restarted mid-job; re-invoke `organize_books`. Measured cleaning rate: **~8 min per hour of source audio** (see skills for provenance).
 
 ## Testing
 
@@ -100,4 +116,4 @@ Integration tests may require a real ABS instance and Libation library.
 - [ARCHITECTURE.md](ARCHITECTURE.md) -- Module map and pipeline
 - [CODEFLOW.md](CODEFLOW.md) -- Runtime flow diagrams
 - [CONFIGURATION.md](CONFIGURATION.md) -- Full CLI flag reference
-- [abs-mcp/README.md](../abs-mcp/README.md) -- MCP server setup, tools, and Docker deployment
+- [abs_mcp/README.md](../abs_mcp/README.md) -- MCP server setup, tools, and Docker deployment

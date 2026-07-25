@@ -282,7 +282,7 @@ log/
 # Exclude all markdown files except README.md
 *.md
 !README.md
-!abs-mcp/skills/*.md
+!abs_mcp/skills/*.md
 !docs/*.md
 !openspec/specs/**/*.md
 
@@ -331,8 +331,8 @@ modules/audio_cleaner.py.backup-*
 # --- Credential / environment-specific files ---
 arguments-test.yaml
 test_arguments.yaml
-abs-mcp/libraries.yaml
-abs-mcp/libraries.test.yaml
+abs_mcp/libraries.yaml
+abs_mcp/libraries.test.yaml
 
 # --- Docker overrides (real paths, not committed) ---
 docker/docker-compose.override.yml

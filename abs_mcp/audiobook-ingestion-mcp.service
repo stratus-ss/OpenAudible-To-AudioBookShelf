@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=stratus
 WorkingDirectory=/home/stratus/OpenAudible-To-AudioBookShelf
-Environment=MCP_ENV_FILE=/home/stratus/OpenAudible-To-AudioBookShelf/abs-mcp/.env
-ExecStart=/home/stratus/OpenAudible-To-AudioBookShelf/venv/bin/python abs-mcp/mcp_server.py
+Environment=MCP_ENV_FILE=/home/stratus/OpenAudible-To-AudioBookShelf/abs_mcp/.env
+ExecStart=/home/stratus/OpenAudible-To-AudioBookShelf/venv/bin/python abs_mcp/mcp_server.py
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

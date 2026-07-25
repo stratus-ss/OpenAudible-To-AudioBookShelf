@@ -3,9 +3,9 @@
 # Exercises every exposed tool and all override parameters against the test ABS instance.
 #
 # Usage:
-#   bash abs-mcp/test_mcp.sh                        # full test
-#   bash abs-mcp/test_mcp.sh --skip-download         # skip Libation download
-#   bash abs-mcp/test_mcp.sh --env abs-mcp/.env      # custom env file
+#   bash abs_mcp/test_mcp.sh                        # full test
+#   bash abs_mcp/test_mcp.sh --skip-download         # skip Libation download
+#   bash abs_mcp/test_mcp.sh --env abs_mcp/.env      # custom env file
 
 set -uo pipefail
 

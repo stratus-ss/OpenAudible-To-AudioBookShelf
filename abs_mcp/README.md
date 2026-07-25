@@ -99,7 +99,7 @@ sudo mount -t nfs abs-server:/path/to/audiobookshelf/audiobooks /mnt/abs/audiobo
 ### Step 5: Create the Environment File
 
 ```bash
-cd abs-mcp
+cd abs_mcp
 cp .env.example .env
 ```
 
@@ -151,7 +151,7 @@ libraries:
 Add to `.env`:
 
 ```bash
-LIBRARIES_CONFIG=abs-mcp/libraries.yaml
+LIBRARIES_CONFIG=abs_mcp/libraries.yaml
 ```
 
 Tools then accept a `library` parameter (e.g. `library="kids"`) instead of raw UUIDs.
@@ -181,20 +181,20 @@ docker pull ghcr.io/stratus-ss/mcps/audiobook-ingestion-mcp:latest
 **Run with `docker run`:**
 
 ```bash
-# Run from the REPO ROOT (so relative paths to ./abs-mcp/ resolve correctly)
+# Run from the REPO ROOT (so relative paths to ./abs_mcp/ resolve correctly)
 cd /path/to/Import-To-AudioBookShelf
 docker run -d --name audiobook-ingestion-mcp \
   --restart unless-stopped \
   -p 8765:8765 \
   -e LIBATION_CLI=/libation/LibationCli \
   -e LIBATION_FILES_DIR=/config \
-  -e MCP_ENV_FILE=/app/abs-mcp/.env \
+  -e MCP_ENV_FILE=/app/abs_mcp/.env \
   -v /path/to/libation/config:/config \
   -v /path/to/libation/books:/data \
   -v /path/to/kids/audiobooks:/path/to/kids/audiobooks \
   -v /path/to/adult/audiobooks:/path/to/adult/audiobooks \
-  -v ./abs-mcp/libraries.yaml:/app/abs-mcp/libraries.yaml:ro \
-  -v ./abs-mcp/.env:/app/abs-mcp/.env:ro \
+  -v ./abs_mcp/libraries.yaml:/app/abs_mcp/libraries.yaml:ro \
+  -v ./abs_mcp/.env:/app/abs_mcp/.env:ro \
   ghcr.io/stratus-ss/mcps/audiobook-ingestion-mcp:latest
 ```
 
@@ -232,7 +232,7 @@ The base `docker/docker-compose.yml` is committed with placeholders; `docker/doc
 ```bash
 cd /path/to/Import-To-AudioBookShelf
 source venv/bin/activate
-MCP_ENV_FILE=abs-mcp/.env venv/bin/python abs-mcp/mcp_server.py
+MCP_ENV_FILE=abs_mcp/.env venv/bin/python abs_mcp/mcp_server.py
 # Listening on http://0.0.0.0:8765
 ```
 
@@ -257,10 +257,10 @@ The server runs on the same machine as Cursor. Add to `~/.cursor/mcp.json` under
 {
   "audiobook-ingestion": {
     "command": "/path/to/Import-To-AudioBookShelf/venv/bin/python",
-    "args": ["/path/to/Import-To-AudioBookShelf/abs-mcp/mcp_server.py"],
+    "args": ["/path/to/Import-To-AudioBookShelf/abs_mcp/mcp_server.py"],
     "env": {
       "MCP_TRANSPORT": "stdio",
-      "MCP_ENV_FILE": "/path/to/Import-To-AudioBookShelf/abs-mcp/.env"
+      "MCP_ENV_FILE": "/path/to/Import-To-AudioBookShelf/abs_mcp/.env"
     }
   }
 }
@@ -287,10 +287,10 @@ Add to `~/.claude/settings.json` (or project `.mcp.json`):
   "mcpServers": {
     "audiobook-ingestion": {
       "command": "/path/to/Import-To-AudioBookShelf/venv/bin/python",
-      "args": ["/path/to/Import-To-AudioBookShelf/abs-mcp/mcp_server.py"],
+      "args": ["/path/to/Import-To-AudioBookShelf/abs_mcp/mcp_server.py"],
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "MCP_ENV_FILE": "/path/to/Import-To-AudioBookShelf/abs-mcp/.env"
+        "MCP_ENV_FILE": "/path/to/Import-To-AudioBookShelf/abs_mcp/.env"
       }
     }
   }
@@ -329,7 +329,7 @@ The service file ships with paths for the `open-audible` host. If your paths dif
 
 ```bash
 # Install and enable
-sudo cp abs-mcp/audiobook-ingestion-mcp.service /etc/systemd/system/
+sudo cp abs_mcp/audiobook-ingestion-mcp.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now audiobook-ingestion-mcp
 
@@ -365,9 +365,9 @@ The container listens on `/mcp` (default Streamable HTTP path) regardless of hos
 `test_mcp.sh` exercises every tool with default `.env` values **and** per-call overrides.
 
 ```bash
-bash abs-mcp/test_mcp.sh                        # full test against .env.test
-bash abs-mcp/test_mcp.sh --skip-download         # skip Libation download step
-bash abs-mcp/test_mcp.sh --env abs-mcp/.env      # use production env
+bash abs_mcp/test_mcp.sh                        # full test against .env.test
+bash abs_mcp/test_mcp.sh --skip-download         # skip Libation download step
+bash abs_mcp/test_mcp.sh --env abs_mcp/.env      # use production env
 ```
 
 #### Test Environment
@@ -378,7 +378,7 @@ bash abs-mcp/test_mcp.sh --env abs-mcp/.env      # use production env
 - **NFS mount**: `your-nfs-host:/path/to/audiobookshelf/audiobooks` -> `/mnt/abs-test/audiobooks`
 
 ```bash
-MCP_ENV_FILE=abs-mcp/.env.test venv/bin/python abs-mcp/mcp_server.py
+MCP_ENV_FILE=abs_mcp/.env.test venv/bin/python abs_mcp/mcp_server.py
 ```
 
 ---
@@ -482,7 +482,7 @@ Additional discovery and management tools:
 
 | Variable | Description | Default |
 |---|---|---|
-| `LIBRARIES_CONFIG` | Path to YAML library registry | `abs-mcp/libraries.yaml` |
+| `LIBRARIES_CONFIG` | Path to YAML library registry | `abs_mcp/libraries.yaml` |
 
 #### MCP Transport
 
@@ -492,7 +492,7 @@ Additional discovery and management tools:
 | `MCP_HOST` | Listen address | `0.0.0.0` |
 | `MCP_PORT` | Listen port | `8765` |
 | `MCP_STREAMABLE_PATH` | URL path for the Streamable HTTP endpoint | `/mcp` |
-| `TOOL_METRICS_PATH` | JSONL file path for persisted tool metrics | `abs-mcp/data/tool-metrics.jsonl` |
+| `TOOL_METRICS_PATH` | JSONL file path for persisted tool metrics | `abs_mcp/data/tool-metrics.jsonl` |
 
 ### Available Tools
 
@@ -644,6 +644,8 @@ Organize downloaded audiobooks into `Author/Series/Title` hierarchy on the desti
 
 Default audio format is `.m4b`. If no `.m4b` files are found in the source directory, the tool auto-detects the actual extension present (e.g. `.mp3`). The detected extension is included in the response. Pass `audio_file_extension` explicitly only if you specifically need a non-default format.
 
+**Async job pattern (DR-6):** This tool returns immediately (in ~4ms) with `{"job_id": str, "status": "started"}`. The actual work runs in a background thread. Use `get_job_result(job_id)` to poll for the final response (which lives in the `result` field). Use `get_cleaning_progress()` for per-book/per-stage progress during long runs (free, 2-5ms each, safe to call concurrently). Single-slot guard: if a job is already running, this tool returns `{"error": "Job already running", "active_job_id": "..."}`. See `get_job_result` for the unknown-job-after-restart behavior.
+
 | Parameter | Type | Description |
 |---|---|---|
 | `purchased_how_long_ago` | int | Days filter (0 = all) |
@@ -654,7 +656,22 @@ Default audio format is `.m4b`. If no `.m4b` files are found in the source direc
 | `copy_instead_of_move` | bool | Copy files instead of moving |
 | `libation_folder_cleanup` | bool | Delete Libation source folders after move |
 | `libation_file_locations_path` | str | Path to Libation FileLocationsV2.json |
-| `enable_profanity_cleaning` | bool | Toggle monkeyplug filtering |
+| `enable_profanity_cleaning` | bool | Toggle monkeyplug filtering. Failed books are skipped (absent from `moved`) and reported in `cleaning_failures[]`. Requires `REMOTE_WHISPER_URL` env var. Measured: ~8 min per hour of audio against production Whisper backend. |
+
+##### get_cleaning_progress
+
+Poll mid-operation for per-book profanity cleaning progress. Returns JSON with per-ASIN state (processing/transcribing/done/failed/skipped) plus per-book `stage` (staging|uploading|transcribing|done|failed|skipped) and aggregate `books_done` / `books_total` counters. Safe to call concurrently with `organize_books`/`ingest_books` — returns in 2-5ms.
+
+##### get_job_result
+
+Poll for the final result of an async `organize_books` or `ingest_books` call.
+
+| Path | Return |
+|------|--------|
+| Job running | `{"status": "running", "job_id": str}` |
+| Job complete | `{"status": "completed", "job_id": str, "result": dict}` — `result` matches the previous synchronous response schema (moved[], cleaning_failures[], cleaning{...}) |
+| Unknown job | `{"error": "Unknown job", "job_id": str}` — server restarted mid-job; re-invoke the originating tool |
+| Concurrent job | `organize_books` returns `{"error": "Job already running", "active_job_id": "..."}` instead of starting a new one |
 
 ##### scan_audiobookshelf
 

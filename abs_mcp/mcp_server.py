@@ -31,6 +31,15 @@ import yaml
 
 ABS_MCP_DIR = Path(__file__).resolve().parent
 
+# library_parser/tool_metrics below are bare top-level imports (not package-
+# relative) so this file keeps working when run directly as a script
+# (`python abs_mcp/mcp_server.py`, its only real invocation path). Explicitly
+# ensuring our own directory is on sys.path makes that resolve deterministically
+# regardless of caller cwd/invocation style, instead of relying on the
+# incidental sys.path[0] Python adds for direct script execution.
+if str(ABS_MCP_DIR) not in sys.path:
+    sys.path.insert(0, str(ABS_MCP_DIR))
+
 _cleaning_progress: dict = {}
 _CLEANING_PROGRESS_LOCK = threading.Lock()
 
@@ -954,8 +963,11 @@ async def organize_books(
         libation_file_locations_path: Path to Libation FileLocationsV2.json (default: from .env).
         enable_profanity_cleaning: Enable monkeyplug profanity filtering (default: from .env).
 
-        Note: When enable_profanity_cleaning=True, expect ~2-5 min per hour
-        of audio content, heavily dependent on Whisper backend load.
+        Note: When enable_profanity_cleaning=True, expect ~8 min per hour
+        of audio content (empirically measured: 8.13 min/hour benchmark,
+        7.72 min/hour functional-test confirmation — see
+        agent_planning/execution/profanity_cleaning_mcp_friendly/artifacts/),
+        heavily dependent on Whisper backend load.
         Audio files >150MB are split into ~145MB chunks and processed
         sequentially. Use get_cleaning_progress() to poll progress
         mid-operation.
@@ -1022,13 +1034,6 @@ def get_job_result(job_id: str) -> dict:
         return {"status": "failed", "job_id": job_id, "error": str(exc)}
 
     return {"status": "completed", "job_id": job_id, "result": _active_job["result"]}
-    clean["audio_file_extension"] = cfg.audio_file_extension
-    return _record_tool_result(
-        "organize_books",
-        _tool_start,
-        json.dumps(clean),
-        success=not bool(clean.get("error")),
-    )
 
 
 def _detect_audio_extension(source_dir: Path) -> str:
@@ -1430,8 +1435,11 @@ async def ingest_books(
         abs_library_id: ABS library UUID (default: from .env or library config).
         abs_api_token: ABS API bearer token (default: from .env or library config).
 
-        Note: When enable_profanity_cleaning=True, expect ~2-5 min per hour
-        of audio content, heavily dependent on Whisper backend load.
+        Note: When enable_profanity_cleaning=True, expect ~8 min per hour
+        of audio content (empirically measured: 8.13 min/hour benchmark,
+        7.72 min/hour functional-test confirmation — see
+        agent_planning/execution/profanity_cleaning_mcp_friendly/artifacts/),
+        heavily dependent on Whisper backend load.
         Audio files >150MB are split into ~145MB chunks and processed
         sequentially. Use get_cleaning_progress() to poll progress
         mid-operation.
