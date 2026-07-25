@@ -1,4 +1,4 @@
-.PHONY: all format lint typecheck check fix test test-coverage test-verbose clean clean-pyc clean-all install install-dev config help validate venv run run-help code-quality deps-check deps-update
+.PHONY: all format lint typecheck check fix test test-coverage test-verbose clean clean-pyc clean-all install install-dev config help validate venv run run-help code-quality deps-check deps-update sync-skills sync-skills-check
 
 # Virtual environment configuration
 VENV_DIR = venv
@@ -50,6 +50,39 @@ lint-infra-leaks:
 	@python3 scripts/check-infra-leaks.py --staged
 	@echo "✅ No personal-infrastructure leaks detected"
 	@echo "✅ Code formatting check passed"
+
+# Sync MCP skills to scratch_pad and the production Moltis instance.
+# Required when modifying files under abs_mcp/skills/ — see docs/AGENTS.md
+# "Skill sync procedure". Run after committing skill changes locally.
+SKILL_SOURCE  = abs_mcp/skills/moltis-audiobook-pipeline.md
+SKILL_SCRATCH = $(HOME)/git_projects/scratch_pad/moltis/skills/audiobook-pipeline/SKILLS.md
+SKILL_MOLTIS  = stratus@arch-openclaw:.moltis/skills/audiobook-pipeline/SKILL.md
+
+sync-skills:
+	@echo "🔄 Syncing moltis audiobook-pipeline skill to 2 destinations..."
+	@cp "$(SKILL_SOURCE)" "$(SKILL_SCRATCH)"
+	@scp -q "$(SKILL_SOURCE)" "$(SKILL_MOLTIS)"
+	@echo "📋 Verifying md5 across all 3 locations..."
+	@md5sum "$(SKILL_SOURCE)" "$(SKILL_SCRATCH)"
+	@ssh -q stratus@arch-openclaw 'md5sum ~/.moltis/skills/audiobook-pipeline/SKILL.md'
+	@echo "✅ Skill sync complete — verify all 3 md5s match above"
+
+# Verify all 3 skill locations share the same md5. Exits non-zero on drift.
+# Useful for CI or manual drift checks.
+sync-skills-check:
+	@echo "🔍 Checking skill sync across 3 locations..."
+	@LOCAL=$$(md5sum "$(SKILL_SOURCE)" | awk '{print $$1}'); \
+	SCRATCH=$$(md5sum "$(SKILL_SCRATCH)" | awk '{print $$1}'); \
+	REMOTE=$$(ssh -q stratus@arch-openclaw 'md5sum ~/.moltis/skills/audiobook-pipeline/SKILL.md' | awk '{print $$1}'); \
+	echo "  local    : $$LOCAL"; \
+	echo "  scratch  : $$SCRATCH"; \
+	echo "  moltis   : $$REMOTE"; \
+	if [ "$$LOCAL" = "$$SCRATCH" ] && [ "$$LOCAL" = "$$REMOTE" ]; then \
+		echo "✅ All 3 locations in sync"; \
+	else \
+		echo "❌ Skill drift detected — run \`make sync-skills\`"; \
+		exit 1; \
+	fi
 
 # Type check with mypy
 typecheck: install-dev
@@ -259,4 +292,8 @@ help:
 	@echo "  config       - Show current configuration"
 	@echo "  deps-check   - Check for outdated dependencies"
 	@echo "  deps-update  - Update dependencies (interactive)"
+	@echo ""
+	@echo "🔄 Skill Sync (abs_mcp/skills/* changes):"
+	@echo "  sync-skills       - Copy moltis skill to scratch_pad + arch-openclaw (run after committing skill changes)"
+	@echo "  sync-skills-check - Verify all 3 skill locations share md5 (safe to run anytime)"
 	@echo "  help         - Show this help message"

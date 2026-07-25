@@ -129,3 +129,22 @@ Integration tests may require a real ABS instance and Libation library.
 - [CODEFLOW.md](CODEFLOW.md) -- Runtime flow diagrams
 - [CONFIGURATION.md](CONFIGURATION.md) -- Full CLI flag reference
 - [abs_mcp/README.md](../abs_mcp/README.md) -- MCP server setup, tools, and Docker deployment
+
+## Skill sync procedure (required)
+
+The MCP skill lives in 3 locations that must stay in sync:
+
+1. `abs_mcp/skills/moltis-audiobook-pipeline.md` — **source of truth** in this repo
+2. `~/git_projects/scratch_pad/moltis/skills/audiobook-pipeline/SKILLS.md` — scratch_pad mirror (git-tracked there)
+3. `stratus@arch-openclaw:~/.moltis/skills/audiobook-pipeline/SKILL.md` — production Moltis instance (live; picked up by the Telegram agent on next session)
+
+**When you modify any file under `abs_mcp/skills/`:**
+
+1. Commit the change in this repo (per normal workflow)
+2. Run `make sync-skills` to copy to scratch_pad and arch-openclaw
+3. Verify the md5 of all 3 locations matches (printed by `make sync-skills`)
+4. Commit the scratch_pad mirror in a separate commit there (`sync: moltis audiobook-pipeline skill (...)`)
+
+If you skip step 2-4, the live Telegram agent will keep using the old skill and your changes won't take effect for end users. Drift can also happen the other way: if you edit the arch-openclaw copy directly, those changes will be lost on the next sync. Always edit the source in this repo.
+
+Use `make sync-skills-check` to verify all 3 are in sync without copying (safe to run anytime; useful for manual drift detection).
