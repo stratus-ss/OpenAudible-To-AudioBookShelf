@@ -9,10 +9,8 @@ Covers:
 
 import asyncio
 import io
-import importlib.util
 import json
 import os
-import sys
 import tempfile
 import time
 from pathlib import Path
@@ -24,27 +22,27 @@ from openaudible_to_audiobookshelf.config import Config
 
 
 # ---------------------------------------------------------------------------
-# Module loading helpers (mcp_server lives in abs-mcp/, not src/)
+# Module loading helpers
 # ---------------------------------------------------------------------------
+#
+# organize_books, get_job_result, get_cleaning_progress, and the names these
+# tests monkeypatch (_build_config, _detect_audio_extension, step_organize,
+# _record_tool_result, _active_job, _last_downloaded_asins) all live in
+# abs_mcp.tools.ingestion post-decomposition (moved out of the mcp_server.py
+# monolith). Unlike the old monolith, this module uses clean package-relative
+# imports, so it's importable normally -- no importlib.util.spec_from_file_location
+# script-loading hack needed.
+
 
 def _load_mcp_server_module():
-    """Load abs-mcp/mcp_server.py without triggering FastMCP startup."""
-    repo_root = Path(__file__).resolve().parent.parent
-    mcp_dir = repo_root / "abs-mcp"
-    mcp_path = mcp_dir / "mcp_server.py"
-    if not mcp_path.is_file():
-        return None
-    mcp_dir_str = str(mcp_dir)
-    if mcp_dir_str not in sys.path:
-        sys.path.insert(0, mcp_dir_str)
+    """Import abs_mcp.tools.ingestion, the module now hosting the ingestion tools."""
     # Prevent .env loading so test env is deterministic
     os.environ["MCP_ENV_FILE"] = ""
-    spec = importlib.util.spec_from_file_location("mcp_server_under_test", mcp_path)
-    if spec is None or spec.loader is None:
+    try:
+        from abs_mcp.tools import ingestion
+    except ImportError:
         return None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return ingestion
 
 
 _MCP_SERVER = _load_mcp_server_module()
@@ -259,7 +257,7 @@ def test_step_organize_caps_cleaning_failures_at_50(tmp_path, monkeypatch) -> No
 
 
 @pytest.mark.skipif(
-    _MCP_SERVER is None, reason="abs-mcp/mcp_server.py could not be imported"
+    _MCP_SERVER is None, reason="abs_mcp/mcp_server.py could not be imported"
 )
 def test_organize_books_returns_job_id_immediately(tmp_path, monkeypatch) -> None:
     """DR-6: organize_books returns {"job_id": str, "status": "started"} immediately."""
@@ -314,7 +312,7 @@ def test_organize_books_returns_job_id_immediately(tmp_path, monkeypatch) -> Non
 
 
 @pytest.mark.skipif(
-    _MCP_SERVER is None, reason="abs-mcp/mcp_server.py could not be imported"
+    _MCP_SERVER is None, reason="abs_mcp/mcp_server.py could not be imported"
 )
 def test_get_job_result_returns_completed_result(tmp_path, monkeypatch) -> None:
     """DR-6: After async job completes, get_job_result returns the result."""
@@ -378,7 +376,7 @@ def test_get_job_result_returns_completed_result(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.skipif(
-    _MCP_SERVER is None, reason="abs-mcp/mcp_server.py could not be imported"
+    _MCP_SERVER is None, reason="abs_mcp/mcp_server.py could not be imported"
 )
 def test_get_job_result_unknown_job() -> None:
     """DR-6: get_job_result with no active job returns Unknown job error."""
@@ -392,7 +390,7 @@ def test_get_job_result_unknown_job() -> None:
 
 
 @pytest.mark.skipif(
-    _MCP_SERVER is None, reason="abs-mcp/mcp_server.py could not be imported"
+    _MCP_SERVER is None, reason="abs_mcp/mcp_server.py could not be imported"
 )
 def test_organize_books_rejects_concurrent_job(tmp_path, monkeypatch) -> None:
     """DR-6: While a job is running, second organize_books call returns error."""
@@ -452,7 +450,7 @@ def test_organize_books_rejects_concurrent_job(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.skipif(
-    _MCP_SERVER is None, reason="abs-mcp/mcp_server.py could not be imported"
+    _MCP_SERVER is None, reason="abs_mcp/mcp_server.py could not be imported"
 )
 def test_get_cleaning_progress_callable_during_job(tmp_path, monkeypatch) -> None:
     """DR-6 primary requirement: get_cleaning_progress is callable concurrently
@@ -512,8 +510,8 @@ def test_get_cleaning_progress_callable_during_job(tmp_path, monkeypatch) -> Non
         return polls
 
     polls = asyncio.run(_drive())
-    # All polls must return a JSON string (parses to dict) and complete quickly
+    # All polls must return a dict (FastMCP auto-serializes to structuredContent)
+    # and complete quickly.
     for elapsed_ms, progress in polls:
-        assert isinstance(progress, str)
-        json.loads(progress)  # parses without error
+        assert isinstance(progress, dict)
         assert elapsed_ms < 200, f"get_cleaning_progress took {elapsed_ms:.0f}ms — should be <200ms"

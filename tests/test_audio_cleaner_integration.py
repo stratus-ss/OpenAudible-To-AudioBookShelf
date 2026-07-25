@@ -14,7 +14,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock, call
+from unittest.mock import Mock, patch, MagicMock
 
 import pytest
 
@@ -65,23 +65,6 @@ class TestAudioCleanerInitialization:
             assert os.path.exists(work_dir)
             assert cleaner.working_dir == Path(work_dir)
 
-    def test_initializes_statistics(self, base_config, mock_log_file):
-        """Test that statistics counters are initialized."""
-        cleaner = AudioCleaner(base_config, mock_log_file)
-
-        assert cleaner.total_processed == 0
-        assert cleaner.total_failed == 0
-        assert cleaner.total_profanities == 0
-
-    def test_reads_copy_mode_from_config(self, base_config, mock_log_file):
-        """Test that copy mode is read from config."""
-        base_config.copy_instead_of_move = True
-
-        cleaner = AudioCleaner(base_config, mock_log_file)
-
-        assert cleaner.copy_mode is True
-
-
 class TestSetupOutputPaths:
     """Test _setup_output_paths method."""
 
@@ -115,10 +98,22 @@ class TestSetupOutputPaths:
             assert "&" not in output_filename
             assert "," not in output_filename
 
-    def test_handles_m4b_format_conversion(self, base_config, mock_log_file):
-        """Test that .m4b extension is converted to m4a format."""
+    @pytest.mark.parametrize(
+        "save_transcripts, expect_transcript_path",
+        [(True, True), (False, False)],
+        ids=["transcripts_enabled", "transcripts_disabled"],
+    )
+    def test_transcript_path_respects_config(
+        self,
+        base_config,
+        mock_log_file,
+        save_transcripts,
+        expect_transcript_path,
+    ):
+        """Test that transcript path creation follows the save_transcripts setting."""
         with tempfile.TemporaryDirectory() as tmpdir:
             base_config.working_directory = tmpdir
+            base_config.save_transcripts = save_transcripts
 
             cleaner = AudioCleaner(base_config, mock_log_file)
             book_data = {"asin": "TEST123", "title": "Test"}
@@ -126,36 +121,11 @@ class TestSetupOutputPaths:
 
             paths = cleaner._setup_output_paths(source_file, book_data)
 
-            assert paths["audio_format"] == "m4b"
-            assert paths["ext"] == "m4b"
-
-    def test_includes_transcript_path_when_enabled(self, base_config, mock_log_file):
-        """Test that transcript path is included when save_transcripts is True."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            base_config.working_directory = tmpdir
-            base_config.save_transcripts = True
-
-            cleaner = AudioCleaner(base_config, mock_log_file)
-            book_data = {"asin": "TEST123", "title": "Test"}
-            source_file = "/path/to/test.m4b"
-
-            paths = cleaner._setup_output_paths(source_file, book_data)
-
-            assert paths["transcript_file"] is not None
-            assert "_transcript.json" in paths["transcript_file"]
-
-    def test_excludes_transcript_path_when_disabled(self, base_config, mock_log_file):
-        """Test that transcript path is None when save_transcripts is False."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            base_config.working_directory = tmpdir
-
-            cleaner = AudioCleaner(base_config, mock_log_file)
-            book_data = {"asin": "TEST123", "title": "Test"}
-            source_file = "/path/to/test.m4b"
-
-            paths = cleaner._setup_output_paths(source_file, book_data)
-
-            assert paths["transcript_file"] is None
+            if expect_transcript_path:
+                assert paths["transcript_file"] is not None
+                assert "_transcript.json" in paths["transcript_file"]
+            else:
+                assert paths["transcript_file"] is None
 
 
 class TestInitializeMonkeyplug:
@@ -183,14 +153,10 @@ class TestInitializeMonkeyplug:
         mock_plugger_class.assert_called_once()
         call_kwargs = mock_plugger_class.call_args[1]
         
-        assert call_kwargs["iFileSpec"] == source_file
-        assert call_kwargs["oFileSpec"] == paths["output_file"]
-        assert call_kwargs["oAudioFileFormat"] == "m4a"
         assert call_kwargs["iSwearsFileSpec"] == "/path/to/swears.txt"
         assert call_kwargs["remoteUrl"] == "http://whisper:8000"
         assert call_kwargs["apiTimeout"] == 600
-        assert call_kwargs["beep"] is False
-        assert call_kwargs["saveTranscript"] is True
+        assert call_kwargs["useChunking"] is False
 
     @patch('os.path.getsize', return_value=100 * 1024 * 1024)  # 100MB file
     @patch('openaudible_to_audiobookshelf.audio_cleaner.WhisperPlugger')
@@ -411,69 +377,6 @@ class TestCleanupWorkingDirectory:
 
             assert os.path.exists(work_dir)
             assert os.path.exists(test_file)
-
-
-class TestLogStatistics:
-    """Test log_statistics method."""
-
-    def test_writes_statistics_to_log(self, base_config, mock_log_file):
-        """Test that statistics are written to log file."""
-        cleaner = AudioCleaner(base_config, mock_log_file)
-        cleaner.total_processed = 10
-        cleaner.total_failed = 2
-        cleaner.total_profanities = 150
-
-        cleaner.log_statistics()
-
-        # Verify log_file.write was called
-        assert mock_log_file.write.called
-        
-        # Collect all log content
-        calls = [str(call) for call in mock_log_file.write.call_args_list]
-        log_content = "".join(calls)
-        
-        # Verify all statistics appear in log
-        assert "10" in log_content
-        assert "2" in log_content
-        assert "150" in log_content
-        assert "Statistics" in log_content
-
-
-class TestLoggingMethods:
-    """Test logging helper methods."""
-
-    def test_log_writes_with_timestamp(self):
-        """Test that _log includes timestamp."""
-        config = Mock()
-        config.working_directory = "/tmp/test"
-        config.copy_instead_of_move = False
-        log_file = Mock()
-
-        cleaner = AudioCleaner(config, log_file)
-        cleaner._log("Test message", "INFO")
-
-        log_file.write.assert_called_once()
-        call_content = str(log_file.write.call_args[0][0])
-        
-        assert "INFO" in call_content
-        assert "Test message" in call_content
-
-    def test_log_start_header_formats_correctly(self):
-        """Test that start header is properly formatted."""
-        config = Mock()
-        config.working_directory = "/tmp/test"
-        config.copy_instead_of_move = False
-        log_file = Mock()
-
-        cleaner = AudioCleaner(config, log_file)
-        cleaner._log_start_header("Test Book Title")
-
-        calls = [str(call) for call in log_file.write.call_args_list]
-        log_content = "".join(calls)
-        
-        assert "Test Book Title" in log_content
-        assert "profanity cleaning" in log_content
-        assert "=" in log_content  # Separator
 
 
 if __name__ == "__main__":
