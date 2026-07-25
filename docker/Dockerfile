@@ -30,13 +30,7 @@ RUN pip install --break-system-packages --no-cache-dir -r /app/requirements.txt
 # Runtime config (libraries.yaml, .env) is mounted via docker-compose volumes.
 COPY pyproject.toml /app/pyproject.toml
 COPY src/ /app/src/
-COPY abs-mcp/mcp_server.py /app/abs-mcp/mcp_server.py
-COPY abs-mcp/_mcp_bridge.py /app/abs-mcp/_mcp_bridge.py
-COPY abs-mcp/tool_metrics.py /app/abs-mcp/tool_metrics.py
-COPY abs-mcp/library_parser.py /app/abs-mcp/library_parser.py
-COPY abs-mcp/libraries.example.yaml /app/abs-mcp/libraries.example.yaml
-COPY abs-mcp/libraries.yaml.example /app/abs-mcp/libraries.yaml.example
-COPY abs-mcp/.env.example /app/abs-mcp/.env.example
+COPY abs_mcp/ /app/abs_mcp/
 
 RUN pip install --break-system-packages --no-cache-dir -e .
 
@@ -85,13 +79,7 @@ COPY --from=builder /usr/local/lib/python3.12/dist-packages /usr/local/lib/pytho
 WORKDIR /app
 COPY pyproject.toml /app/pyproject.toml
 COPY src/ /app/src/
-COPY abs-mcp/mcp_server.py /app/abs-mcp/mcp_server.py
-COPY abs-mcp/_mcp_bridge.py /app/abs-mcp/_mcp_bridge.py
-COPY abs-mcp/tool_metrics.py /app/abs-mcp/tool_metrics.py
-COPY abs-mcp/library_parser.py /app/abs-mcp/library_parser.py
-COPY abs-mcp/libraries.example.yaml /app/abs-mcp/libraries.example.yaml
-COPY abs-mcp/libraries.yaml.example /app/abs-mcp/libraries.yaml.example
-COPY abs-mcp/.env.example /app/abs-mcp/.env.example
+COPY abs_mcp/ /app/abs_mcp/
 
 # Regenerate a fresh egg-info for the local package so Python can import it.
 # (We deleted RECORD in the builder, so the original dist-info is incomplete.)
@@ -106,4 +94,4 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8765
 
-CMD ["python3", "abs-mcp/mcp_server.py"]
+CMD ["python3", "-m", "abs_mcp.mcp_server"]

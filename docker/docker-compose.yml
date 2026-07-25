@@ -12,15 +12,15 @@
 #   1. /config    -> Libation config (AccountsSettings.json, Settings.json)
 #   2. /data      -> Libation books source directory
 #   3. <each library destination_dir in libraries.yaml>
-#   4. ../abs-mcp/libraries.yaml (read-only) — runtime config from HOST
-#   5. ../abs-mcp/.env (read-only) — runtime env vars (ABS URL, token, etc.) from HOST
+#   4. ../abs_mcp/libraries.yaml (read-only) — runtime config from HOST
+#   5. ../abs_mcp/.env (read-only) — runtime env vars (ABS URL, token, etc.) from HOST
 #
 # NFS mounts must be established on the host BEFORE the container starts.
 # The container is library-agnostic — it reads libraries.yaml at runtime.
 #
 # SECURITY: The image does NOT contain any credentials, library UUIDs, or
 # environment files. You MUST mount your own .env and libraries.yaml from
-# the host. See abs-mcp/README.md "Docker Deployment" section for setup.
+# the host. See abs_mcp/README.md "Docker Deployment" section for setup.
 
 services:
   audiobook-ingestion-mcp:
@@ -30,7 +30,7 @@ services:
     ports:
       - "8765:8765"
     environment:
-      MCP_ENV_FILE: /app/abs-mcp/.env
+      MCP_ENV_FILE: /app/abs_mcp/.env
       LIBATION_CLI: /libation/LibationCli
     volumes:
       # 1. Libation config (AccountsSettings.json, Settings.json)
@@ -53,5 +53,5 @@ services:
 
       # 5. Runtime config (read-only) — paths are relative to REPO ROOT
       # because docker-compose is invoked from there with `-f docker/docker-compose.yml`.
-      - ../abs-mcp/libraries.yaml:/app/abs-mcp/libraries.yaml:ro
-      - ../abs-mcp/.env:/app/abs-mcp/.env:ro
+      - ../abs_mcp/libraries.yaml:/app/abs_mcp/libraries.yaml:ro
+      - ../abs_mcp/.env:/app/abs_mcp/.env:ro

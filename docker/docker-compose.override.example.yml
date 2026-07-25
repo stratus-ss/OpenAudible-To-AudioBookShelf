@@ -26,5 +26,5 @@ services:
       - /srv/abs/adult/podcasts:/path/to/adult/podcasts
 
       # Runtime config (read-only) — paths relative to REPO ROOT
-      - ../abs-mcp/libraries.yaml:/app/abs-mcp/libraries.yaml:ro
-      - ../abs-mcp/.env:/app/abs-mcp/.env:ro
+      - ../abs_mcp/libraries.yaml:/app/abs_mcp/libraries.yaml:ro
+      - ../abs_mcp/.env:/app/abs_mcp/.env:ro

@@ -29,10 +29,10 @@ api_key.txt
 # Both MUST be mounted at runtime, never baked in.
 *.yaml
 *.yml
-!abs-mcp/libraries.example.yaml
-!abs-mcp/libraries.yaml.example
+!abs_mcp/libraries.example.yaml
+!abs_mcp/libraries.yaml.example
 !arguments.yaml
-!abs-mcp/test_arguments.yaml
+!abs_mcp/test_arguments.yaml
 
 # Runtime / state data
 backups/
@@ -42,6 +42,7 @@ FileLocationsV2.json
 book_processing.txt
 book_tree.out
 swear_list.json
+abs_mcp/data/
 
 # Planning / docs not needed in the image
 agent_planning/
