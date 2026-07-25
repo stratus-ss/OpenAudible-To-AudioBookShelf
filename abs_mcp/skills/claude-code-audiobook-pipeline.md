@@ -155,6 +155,12 @@ Measured on 2026-07-24 against production Whisper backend (RTX 5060 Ti, `tiny` m
 
 ETA formula: `(elapsed_sec / books_done) * (books_total - books_done)`. Accuracy: ±25% (measured: ±3% on the 3-book benchmark).
 
+## Profanity Cleaning Resume (added 2026-07-25)
+
+Per-book cleaning state survives MCP service restarts and VM reboots. When `organize_books` is re-invoked for a batch where some books were in-progress, the resume JSON (`~/.cache/monkeyplug-cleaning/profanity_cleaning_resume.json` by default — **NOT `/tmp`**) lets the pipeline pick up where it left off. MonkeyPlug's `AudioChunker` detects existing chunk files and only re-transcribes missing chunks.
+
+**Action:** if the MCP service crashes mid-batch, just re-invoke `organize_books` with the same params. Don't start a fresh batch — the resume state will handle the recovery.
+
 ## Async Job Pattern (DR-6)
 
 `organize_books` and `ingest_books` are async:

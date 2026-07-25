@@ -1,6 +1,6 @@
 ---
 name: audiobook-pipeline
-description: "Audiobook ingestion pipeline. ALWAYS read this skill before any audiobook task. Critical: run export_library() before list_library(). Never filter by status=NotLiberated on first search. If a book is Liberated but user wants it in a different library, use set_book_status to unliberate and re-download it."
+description: "Audiobook ingestion pipeline. ALWAYS read this skill before any audiobook task. Critical: run export_library() before list_library(). Never filter by status=NotLiberated on first search. If a book is Liberated but user wants it in a different library, use set_book_status to unliberate and re-download it. Profanity cleaning survives crashes/restarts: re-running organize_books for an in-progress batch resumes from completed chunks (see 'Resume state' below)."
 allowed_tools:
   - mcp__audiobook-ingestion__list_libraries
   - mcp__audiobook-ingestion__get_status
@@ -281,10 +281,29 @@ When `enable_profanity_cleaning=true`, the `result` dict includes:
 
 ### Progress fields — get_cleaning_progress
 
-- `stage`: `staging` | `uploading` | `transcribing` | `done` | `failed` | `skipped` — the current per-book stage
+- `stage`: `staging` | `uploading` | `transcribing` | `resuming` | `done` | `failed` | `skipped` — the current per-book stage. `resuming` fires briefly when a re-run picks up partial chunks from a previous crash (see Resume state below).
 - `books_done`: integer, count of books that reached `done` stage
 - `books_total`: integer, total books in the current batch
 - Per-ASIN entries include the current `stage` for that book
+
+## Resume state (added 2026-07-25)
+
+Per-book profanity cleaning state survives **MCP service restarts and VM reboots**. When `organize_books` is re-invoked for a batch where some books were in-progress:
+
+1. Books already marked `done` are skipped (existing fast path).
+2. Books marked `in_progress` (with a valid working dir) are **resumed** — MonkeyPlug's `AudioChunker` detects existing chunk files and only re-transcribes missing chunks. Look for the `resuming` stage in `get_cleaning_progress` output.
+3. Books with corrupt or missing working dirs are auto-reset and retried from scratch.
+
+**Where the state lives:** `<working_dir>/../profanity_cleaning_resume.json`. Default working dir is `~/.cache/monkeyplug-cleaning` (XDG cache, **durable — NOT `/tmp`**). On the deployed server it resolves to `/home/stratus/.cache/monkeyplug-cleaning/profanity_cleaning_resume.json`.
+
+**JSON formats** (both accepted; legacy entries still work):
+- Legacy: `{"B0X": "done"}` or `{"B0X": "failed"}` — string values
+- New: `{"B0X": {"status": "in_progress" | "done", "working_dir": "<path>"}}` — object values
+
+**Operational guidance:**
+- If the MCP service crashes mid-batch, just re-invoke `organize_books` with the same params. Resume state will pick up where it left off.
+- If a book keeps failing, inspect `/home/stratus/.cache/monkeyplug-cleaning/<ASIN>/` for chunk files + transcript JSONs. Delete the directory if you want to force a clean retry — the resume JSON entry will be reset to `"failed"` on the next call.
+- The `~8 min per hour of audio` estimate assumes a healthy backend. With the single-worker backend (see Troubleshooting), a single 100MB chunk can take ~5–20 minutes, blocking all other endpoints including `/docs`.
 
 ## Pipeline Step Reference
 
@@ -314,6 +333,9 @@ When `enable_profanity_cleaning=true`, the `result` dict includes:
 | MCP unresponsive / "Session not found" | Call `mcp__moltis-admin__restart_mcp_server(server_name="audiobook-ingestion")`. If that fails, ask the user to restart it manually. |
 | Book keeps reappearing after delete | You forgot `cleanup_files=true`. Re-call `delete_library_items(..., cleanup_files=true)`; if the file is still on disk the watcher will resurrect it again. Use `get_source_status` to confirm the book folder is gone. |
 | Profanity cleaning fails for some books | Check `cleaning_failures[]` in the `organize_books` `result` (via `get_job_result`) — each entry has `{asin, title, error}`. Failed books are skipped (absent from `moved[]`); remaining books continue. To retry a failed book, re-run `organize_books` with the same parameters — the resume state will pick it up. |
+| `get_cleaning_progress` reports the same `in_progress` ASIN for >30 min with no progress | The Whisper backend (`containers-gpu.x86experts.com:8001`) is a single uvicorn worker — long transcriptions block all other endpoints. Check `docker logs backend-app-1` on containers-gpu. If the worker OOMed, the container auto-restarts (RestartCount > 0 in `docker ps`). The MCP service will report `Chunking failed: Connection refused` when polling `/task/<uuid>` — this is a backend issue, not the resume feature. |
+| MCP service restarts mid-batch, agent sees "Unknown job" from `get_job_result` | Expected. The async job state is in-memory. Re-invoke `organize_books` with the same parameters — the on-disk resume JSON picks up in-progress books and re-runs completed books normally. |
+| `/home/stratus/.cache/monkeyplug-cleaning/` fills up disk | Per-book working dirs are cleaned on successful cleaning. If cleaning fails, the dir persists with chunks + transcripts. To reclaim space: `rm -rf /home/stratus/.cache/monkeyplug-cleaning/<ASIN>/` then re-run `organize_books` (the entry will be reset to `"failed"` and the book will retry from scratch). |
 
 ## Podcast Workflow
 
