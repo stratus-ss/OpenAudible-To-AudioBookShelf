@@ -9,4 +9,4 @@ feedparser
 mcp[cli]
 
 # MonkeyPlug for audio profanity cleaning (with AudioChunker)
-monkeyplug @ git+https://github.com/stratus-ss/monkeyplug.git@feature/file-chunking
+monkeyplug @ git+https://github.com/stratus-ss/monkeyplug.git@a59b820d121c55064d448e3a5b45a6fa43624c72

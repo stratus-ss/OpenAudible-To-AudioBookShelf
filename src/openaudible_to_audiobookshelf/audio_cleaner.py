@@ -364,6 +364,11 @@ class AudioCleaner:
                 "parallelEncoding": getattr(self.config, "parallel_encoding", True),
                 "maxWorkers": getattr(self.config, "max_workers", None),
                 "verbose": getattr(self.config, "debug", False),
+                "remoteParams": {
+                    "is_diarize": "false",
+                    "vad_filter": "false",
+                    "lang": "en",
+                },
             }
             
             # Log and print MonkeyPlug parameters if debug enabled
