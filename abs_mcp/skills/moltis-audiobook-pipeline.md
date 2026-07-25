@@ -163,6 +163,7 @@ Two libraries exist: **adult** and **kids**. Always specify `library=`. If the u
 
 ## Common Mistakes
 
+0. **Profanity cleaning is OFF by default.** Production `.env` has `ENABLE_PROFANITY_CLEANING=false`. Pass `enable_profanity_cleaning=true` explicitly on `organize_books(...)` for each cleaning request. Default-on would slow every `organize_books` call by ~8 min/hour of audio. When the user asks to "remove swearing" or "clean", use this per-call override; do not flip the global env var. The override survives only for that one job. Note: cleaning requires the Whisper backend to be reachable and works only for chunked files (>150MB); smaller files are skipped silently.
 1. First `list_library` call must omit `status=`. Including `status="NotLiberated"` hides Liberated books.
 2. Always call `export_library()` before `list_library()`. Without it, results are stale.
 3. "Liberated" means downloaded somewhere, not in the requested library. Always re-download to the target library.
