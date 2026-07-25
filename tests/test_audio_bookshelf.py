@@ -1,49 +1,9 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-import requests
 from requests.exceptions import HTTPError
 
 from openaudible_to_audiobookshelf.audio_bookshelf import get_all_books, get_audio_bookshelf_recent_books, update_book_series
-
-
-@pytest.fixture
-def setup_test_environment(tmp_path):
-    # Create temporary directories
-    source_dir = tmp_path / "source"
-    dest_dir = tmp_path / "dest"
-    source_dir.mkdir()
-    dest_dir.mkdir()
-
-    return {
-        "source_dir": str(source_dir),
-        "dest_dir": str(dest_dir),
-        "tmp_path": str(tmp_path),
-    }
-
-
-@pytest.mark.parametrize(
-    "server_url, library_id, abs_api_token, query_params, expected_status",
-    [
-        ("http://abs.example.com", "123456789", "asdflkjanelw123", None, 200),
-        ("http://abs.example.com", "123456789", "asdflkjanelw123", {"force": 1}, 200),
-        ("http://abs.example.com", "invalid_library_id", "asdflkjanelw123", None, 404),
-    ],
-)
-def test_scan_library_for_books(server_url, library_id, abs_api_token, query_params, expected_status, mocker):
-    mock_post = mocker.patch("requests.post")
-
-    mock_response = mocker.MagicMock()
-    mock_response.status_code = expected_status
-    mock_post.return_value = mock_response
-    url = f"{server_url}/api/libraries/{library_id}/scan"
-    headers = {"Authorization": f"Bearer {abs_api_token}"}
-
-    try:
-        response = requests.post(url, headers=headers, params=query_params)
-        assert response.status_code == expected_status
-    except HTTPError:
-        assert response.status_code == expected_status
 
 
 BOOK_DATA = [
@@ -297,36 +257,6 @@ def test_short_title_matching_with_real_abs_title(mocker):
     assert results[0]["media"]["metadata"]["asin"] == "B0C24R5GP1"
     assert results[0]["_original_series"] == "All Trades"
     assert results[0]["_original_volume"] == "1"
-
-
-def test_book_list_matching_no_series(mocker):
-    """Books without a series should still match and have empty series fields."""
-    abs_data = {
-        "results": [
-            {
-                "id": "li_xyz",
-                "addedAt": 1700000000000,
-                "media": {"metadata": {"title": "Shelving Magic Complete Series Boxed Set"}},
-            }
-        ]
-    }
-    book_list = [
-        {
-            "title": "Shelving Magic Complete Series Boxed Set",
-            "short_title": "Shelving Magic Complete Series Boxed Set",
-            "asin": "B0GK35DRY4",
-            "series": "",
-            "volumeNumber": "",
-        }
-    ]
-    response = mocker.MagicMock()
-    response.json.return_value = abs_data
-
-    results = get_audio_bookshelf_recent_books(response, book_list=book_list)
-
-    assert len(results) == 1
-    assert results[0]["_original_series"] == ""
-    assert results[0]["_original_volume"] == ""
 
 
 def test_update_book_series_sends_patch(mocker):

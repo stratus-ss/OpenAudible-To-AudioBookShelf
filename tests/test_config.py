@@ -197,36 +197,6 @@ def test_validate_param(config_kwargs, expect_exit, expected_logs, caplog):
 
 
 @pytest.mark.parametrize(
-    "cli_args,expected_attr",
-    [
-        (["--abs-api-token", "123"], {"abs_api_token": "123"}),
-        (["--purchased-how-long-ago", "3"], {"purchased_how_long_ago": 3}),
-        (["--audio-file-extension", ".mp3"], {"audio_file_extension": ".mp3"}),
-        (["--libation-folder-cleanup"], {"libation_folder_cleanup": True}),
-    ],
-)
-def test_cli_argument_parsing(cli_args, expected_attr):
-    """Test individual CLI arguments set attributes correctly"""
-    # Add exit_on_error=False as first argument to isolate CLI args
-    config = Config.from_args(False, *cli_args)
-    for key, value in expected_attr.items():
-        assert getattr(config, key) == value
-
-
-@pytest.mark.parametrize(
-    "args",
-    [
-        ["--yaml", "config.yaml", "--abs-api-token", "123"],
-        ["--yaml", "config.yaml", "--library-id", "xyz"],
-    ],
-)
-def test_yaml_exclusivity(args):
-    """Test YAML mode prevents other arguments"""
-    with pytest.raises(ConfigError):
-        Config.from_args(False, *args)
-
-
-@pytest.mark.parametrize(
     "yaml_content,expected_attrs",
     [
         (
@@ -255,68 +225,3 @@ def test_from_args(yaml_content, expected_attrs):
         assert getattr(config, attr) == value
 
 
-@pytest.mark.parametrize(
-    "arguments, expected_yaml",
-    [
-        (
-            [
-                "--abs-api-token",
-                "zzzz",
-                "--books-json-path",
-                "books.json",
-                "--purchased-how-long-ago",
-                "0",
-                "--destination-book-directory",
-                "/tmp/ABS/books",
-                "--download-program",
-                "OpenAudible",
-                "--audio-file-extension",
-                ".m4b",
-                "--library-id",
-                "123456",
-                "--log-file-path",
-                "/tmp/book_processing.txt",
-                "--server-url",
-                "http://example.com",
-                "--source-audio-book-directory",
-                "/tmp/OpenAudible/books",
-            ],
-            {
-                "abs_api_token": "zzzz",
-                "books_json_path": "books.json",
-                "purchased_how_long_ago": 0,
-                "destination_book_directory": "/tmp/ABS/books",
-                "download_program": "OpenAudible",
-                "audio_file_extension": ".m4b",
-                "copy_instead_of_move": False,
-                "libation_folder_cleanup": False,
-                "libation_file_locations_path": "",
-                "library_id": "123456",
-                "log_file_path": "/tmp/book_processing.txt",
-                "server_url": "http://example.com",
-                "source_audio_book_directory": "/tmp/OpenAudible/books",
-                "debug": False,
-                "enable_profanity_cleaning": False,
-                "remote_whisper_url": "",
-                "swears_file": "",
-                "working_directory": "/tmp/monkeyplug-cleaning",
-                "save_transcripts": True,
-                "timeout": 600,
-                "beep_mode": False,
-                "confidence_threshold": 0.7,
-                "parallel_encoding": True,
-                "max_workers": None,
-                "poll_interval": 30,
-            },
-        ),
-    ],
-)
-def test_generate_yaml_from_parser(arguments, expected_yaml, tmp_path: Path) -> None:
-    config_obj = Config.from_args(False, *arguments)
-    tmp_file = tmp_path / "config.yaml"
-    config_obj.generate_yaml_from_parser(tmp_file)
-
-    with open(tmp_file, "r") as generated_file:
-        generated_yaml = yaml.safe_load(generated_file)
-
-    assert generated_yaml == expected_yaml

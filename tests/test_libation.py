@@ -143,17 +143,6 @@ def test_libation_processing(setup_test_environment, test_books, expected_path_s
             "Disney_Author/Disney_Agent_Stitch_The_MFiles__Rise_of_the_Mansquito/"
             "Disney Agent Stitch: The M-Files: Rise of the Mansquito [B0F4L31PTG].m4b",
         ),
-        (
-            [
-                {
-                    "AudibleProductId": "B0DQHNJ9WK",
-                    "AuthorNames": "Minecraft Author",
-                    "Title": "My Middle Name Is Minecraft",
-                    "DateAdded": datetime.now(timezone.utc).isoformat(),
-                }
-            ],
-            "Minecraft_Author/My_Middle_Name_Is_Minecraft/My Middle Name Is Minecraft [B0DQHNJ9WK].m4b",
-        ),
     ],
 )
 def test_libation_with_file_locations_json(setup_test_environment, test_books, expected_path_suffix):

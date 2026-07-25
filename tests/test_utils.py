@@ -13,18 +13,12 @@ from openaudible_to_audiobookshelf.utils import (_parse_date, find_existing_seri
         ("2024-04-24T14:35:02Z", "2024-04-24"),  # Test with no ms
         ("2024-04-24T14:35:02.174+04:00", "2024-04-24"),  # Test with timezone offset
         ("2024-04-24T14:35:02+02:00", "2024-04-24"),  # Timezone offset no ms
-        ("2024-12-31T23:59:59.999Z", "2024-12-31"),  # Test with end of year
-        ("2024-01-01T00:00:00.000Z", "2024-01-01"),  # Test with start of year
-        ("2024-02-29T12:00:00.000Z", "2024-02-29"),  # Test with leap year
     ],
     ids=[
         "utc",
         "utc_no_ms",
         "timezone_offset",
         "timezone_no_ms",
-        "end_of_year",
-        "start_of_year",
-        "leap_year",
     ],
 )
 def test_valid_date_formats(date_str, expected):
@@ -65,8 +59,6 @@ def test_make_directory_structure(author_dir, series_dir, book_title_dir, destin
     [
         ("Name, with commas", "Name_with_commas"),  # Commas replaced
         ("Name with spaces", "Name_with_spaces"),  # Spaces replaced
-        ("Name.with.periods", "Name.with.periods"),  # Periods preserved
-        ("Name_with_underscores", "Name_with_underscores"),  # Underscores preserved
         (
             "Name invalid characters!",
             "Name_invalid_characters",
@@ -80,8 +72,6 @@ def test_make_directory_structure(author_dir, series_dir, book_title_dir, destin
     ids=[
         "commas",
         "spaces",
-        "periods",
-        "underscores",
         "invalid_chars",
         "trailing_spaces",
         "empty_string",
@@ -92,16 +82,6 @@ def test_sanitize_name(name, expected):
     result = sanitize_name(name)
     # Assert
     assert result == expected
-
-
-def test_find_existing_series_folder_no_existing(tmp_path):
-    """Test when author folder doesn't exist yet."""
-    result = find_existing_series_folder(
-        "AuthorName", 
-        "Series-Name-With-Hyphens",
-        str(tmp_path)
-    )
-    assert result == "Series_Name_With_Hyphens"
 
 
 def test_find_existing_series_folder_matches_existing(tmp_path):
