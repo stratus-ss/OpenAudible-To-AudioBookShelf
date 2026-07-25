@@ -472,7 +472,7 @@ Additional discovery and management tools:
 | `ENABLE_PROFANITY_CLEANING` | Enable audio profanity filtering | `false` |
 | `REMOTE_WHISPER_URL` | Whisper-WebUI transcription server URL | (empty) |
 | `SWEARS_FILE` | Custom swears list file (JSON or text) | (empty = MonkeyPlug default) |
-| `WORKING_DIRECTORY` | Temp directory for processing | `/tmp/monkeyplug-cleaning` |
+| `WORKING_DIRECTORY` | Durable dir for chunks + transcripts + resume JSON. **Must NOT be `/tmp`** (volatile; breaks resume across reboots). | `~/.cache/monkeyplug-cleaning` |
 | `SAVE_TRANSCRIPTS` | Keep transcript JSON files | `true` |
 | `TIMEOUT` | Transcription timeout in seconds | `600` |
 | `CONFIDENCE_THRESHOLD` | Censoring confidence threshold (0.0-1.0) | `0.70` |
