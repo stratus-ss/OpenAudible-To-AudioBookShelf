@@ -125,6 +125,121 @@ def process_libation_book_json(book_data: dict, file_locations: dict = None) -> 
     return result
 
 
+def _resolve_destination(
+    book_data: dict, destination_dir: str, audio_file_name: str
+) -> tuple[str, str, str, str]:
+    """
+    Resolve the author/series directory names and create the destination
+    directory tree for a book.
+
+    Args:
+        book_data: Standardized book metadata dict.
+        destination_dir: Base destination directory for organized books.
+        audio_file_name: The audio filename (with extension) for this book.
+
+    Returns:
+        A tuple of (author_dir, series_dir, audio_book_destination_dir,
+        target_audio_file_path).
+    """
+    author_dir = sanitize_name(book_data["author"])
+    series_dir = (
+        find_existing_series_folder(author_dir, book_data["series"], destination_dir)
+        if book_data["series"]
+        else ""
+    )
+    book_title_dir = sanitize_name(book_data["title"])
+    audio_book_destination_dir = make_directory_structure(
+        author_dir, series_dir, book_title_dir, destination_dir
+    )
+    target_audio_file_path = os.path.join(
+        audio_book_destination_dir, audio_file_name
+    )
+    return author_dir, series_dir, audio_book_destination_dir, target_audio_file_path
+
+
+def _handle_existing_file_conflict(
+    target_audio_file_path: str,
+    downloaded_audio_file_path: str,
+    book_data: dict,
+    log_file,
+) -> bool:
+    """
+    Check whether a file already exists at the destination and decide whether
+    to skip this book.
+
+    Args:
+        target_audio_file_path: Destination path the file would be moved/copied to.
+        downloaded_audio_file_path: Source path of the downloaded audio file.
+        book_data: Standardized book metadata dict.
+        log_file: File handle for logging.
+
+    Returns:
+        True if the existing file should be kept and this book skipped.
+        False if there is no conflict, or the existing file will be replaced.
+    """
+    if not os.path.exists(target_audio_file_path):
+        return False
+
+    existing_file_size = os.path.getsize(target_audio_file_path)
+    downloaded_file_size = os.path.getsize(downloaded_audio_file_path)
+    if downloaded_file_size < existing_file_size:
+        log_file.write(
+            f"{datetime.now()} - INFO - No change for book: {book_data['title']}\n"
+        )
+        return True
+
+    log_file.write(
+        f"{book_data['title']} has an existing file but it will be replaced! \n"
+    )
+    log_file.write(
+        f"The downloaded file is larger ({downloaded_file_size}) than the existing file \
+            ({existing_file_size}).\n"
+    )
+    print(f"Processing: {book_data['title']}")
+    log_file.write(f"{datetime.now()} - INFO - Processing: {book_data['title']}\n")
+    return False
+
+
+def _clean_audio_if_enabled(
+    audio_cleaner,
+    downloaded_audio_file_path: str,
+    book_data: dict,
+    _tracking: dict | None,
+) -> str | None:
+    """
+    Run profanity cleaning on the downloaded file if an audio_cleaner is
+    configured.
+
+    Args:
+        audio_cleaner: Optional AudioCleaner instance, or None to skip cleaning.
+        downloaded_audio_file_path: Path to the downloaded (uncleaned) audio file.
+        book_data: Standardized book metadata dict.
+        _tracking: Optional dict for recording cleaning failures.
+
+    Returns:
+        The path to the file that should be moved/copied, or None if cleaning
+        failed and this book should be skipped.
+    """
+    if not audio_cleaner:
+        return downloaded_audio_file_path
+
+    try:
+        return audio_cleaner.process_audio_file(downloaded_audio_file_path, book_data)
+    except AudioCleaningError as e:
+        LOGGER.error(
+            "Profanity cleaning failed for %s: %s",
+            book_data.get("title", "Unknown"),
+            e,
+        )
+        if _tracking is not None:
+            _tracking.setdefault("failed_books", []).append({
+                "asin": book_data.get("asin", ""),
+                "title": book_data.get("title", "Unknown"),
+                "error": str(e),
+            })
+        return None
+
+
 def move_audio_book_files(
     audio_file_extension: str,
     books_json_path: str,
@@ -210,15 +325,6 @@ def move_audio_book_files(
                         f"ASIN {book_asin} not in requested set"
                     )
                     continue
-            author_dir = sanitize_name(book_data["author"])
-            series_dir = (
-                find_existing_series_folder(
-                    author_dir, book_data["series"], destination_dir
-                )
-                if book_data["series"]
-                else ""
-            )
-            book_title_dir = sanitize_name(book_data["title"])
             audio_file_name = book_data["filename"] + audio_file_extension
 
             if download_program == "OpenAudible":
@@ -240,55 +346,26 @@ def move_audio_book_files(
 
             if not (os.path.exists(downloaded_audio_file_path)):
                 continue
-            audio_book_destination_dir = make_directory_structure(
-                author_dir, series_dir, book_title_dir, destination_dir
-            )
-            target_audio_file_path = os.path.join(
-                audio_book_destination_dir, audio_file_name
-            )
 
-            if os.path.exists(target_audio_file_path):
-                existing_file_size = os.path.getsize(target_audio_file_path)
-                downloaded_file_size = os.path.getsize(downloaded_audio_file_path)
-                if downloaded_file_size < existing_file_size:
-                    log_file.write(
-                        f"{datetime.now()} - INFO - No change for book: {book_data['title']}\n"
-                    )
-                    continue
-                else:
-                    log_file.write(
-                        f"{book_data['title']} has an existing file but it will be replaced! \n"
-                    )
-                    log_file.write(
-                        f"The downloaded file is larger ({downloaded_file_size}) than the existing file \
-                            ({existing_file_size}).\n"
-                    )
-                print(f"Processing: {book_data['title']}")
-                log_file.write(
-                    f"{datetime.now()} - INFO - Processing: {book_data['title']}\n"
-                )
+            (
+                author_dir,
+                series_dir,
+                audio_book_destination_dir,
+                target_audio_file_path,
+            ) = _resolve_destination(book_data, destination_dir, audio_file_name)
+
+            if _handle_existing_file_conflict(
+                target_audio_file_path, downloaded_audio_file_path, book_data, log_file
+            ):
+                continue
             books_to_process_in_audio_bookself.append(book_data)
 
             # Clean audio file if profanity cleaning is enabled
-            file_to_process = downloaded_audio_file_path
-            if audio_cleaner:
-                try:
-                    file_to_process = audio_cleaner.process_audio_file(
-                        downloaded_audio_file_path, book_data
-                    )
-                except AudioCleaningError as e:
-                    LOGGER.error(
-                        "Profanity cleaning failed for %s: %s",
-                        book_data.get("title", "Unknown"),
-                        e,
-                    )
-                    if _tracking is not None:
-                        _tracking.setdefault("failed_books", []).append({
-                            "asin": book_data.get("asin", ""),
-                            "title": book_data.get("title", "Unknown"),
-                            "error": str(e),
-                        })
-                    continue
+            file_to_process = _clean_audio_if_enabled(
+                audio_cleaner, downloaded_audio_file_path, book_data, _tracking
+            )
+            if file_to_process is None:
+                continue
 
             if os.path.exists(file_to_process):
                 if copy_instead_of_move:
@@ -489,6 +566,15 @@ def step_match(config: Config, book_list: list | None = None, log_file=None) -> 
     all_books = get_all_books(
         config.server_url, config.library_id, config.abs_api_token, log_file
     )
+    if not all_books.ok:
+        log_file.write(f"Failed to fetch library from ABS: {all_books.status_code}\n")
+        return {
+            "step": "match",
+            "success": False,
+            "error": f"ABS request failed with status {all_books.status_code}",
+            "status_code": all_books.status_code,
+            "log": log_file.getvalue() if isinstance(log_file, io.StringIO) else "",
+        }
     recent = get_audio_bookshelf_recent_books(
         all_books,
         log_file,

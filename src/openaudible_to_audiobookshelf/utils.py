@@ -6,8 +6,15 @@ from typing import Optional, TextIO
 
 
 def get_timestamped_log_path(base_log_path: str) -> str:
-    """    
-    Inserts timestamp before the file extension in format: YYYYMMDD_HHMMSS
+    """
+    Insert a timestamp before the file extension.
+
+    Args:
+        base_log_path (str): The original log file path.
+
+    Returns:
+        str: The log file path with a YYYYMMDD_HHMMSS timestamp inserted
+            before the file extension.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = Path(base_log_path)
@@ -19,10 +26,38 @@ def get_timestamped_log_path(base_log_path: str) -> str:
     return str(parent / timestamped_name)
 
 
+def resolve_books_json_path(source_dir: str, explicit_path: str = "") -> str:
+    """
+    Resolve the Libation JSON export path.
+
+    An explicit override (e.g. a per-call MCP parameter or CLI flag) wins;
+    otherwise defaults to '<source_dir>/libation.json'.
+
+    Args:
+        source_dir (str): The Libation source/library directory.
+        explicit_path (str): Optional explicit override path.
+
+    Returns:
+        str: The resolved path to the libation.json export.
+    """
+    if explicit_path:
+        return explicit_path
+    return str(Path(source_dir) / "libation.json")
+
+
 def log_message(log_file: TextIO, message: str, level: str = "INFO"):
     """
-    Provides consistent logging format across the entire application.
+    Write a consistently formatted log line to the given file handle.
+
     Format: YYYY-MM-DD HH:MM:SS.mmmmmm - LEVEL - message
+
+    Args:
+        log_file (TextIO): Open file handle to write the log line to.
+        message (str): The message to log.
+        level (str): The log level label (default: "INFO").
+
+    Returns:
+        None
     """
     timestamp = datetime.now()
     log_file.write(f"{timestamp} - {level} - {message}\n")
@@ -106,18 +141,18 @@ def sanitize_name(name: str) -> str:
 def find_existing_series_folder(author_dir: str, series_name: str, destination_dir: str) -> str:
     """
     Find existing series folder that matches the given series name.
-    
+
     Checks for existing folders by comparing normalized names to avoid
-    creating duplicate folders due to metadata inconsistencies (e.g., 
+    creating duplicate folders due to metadata inconsistencies (e.g.,
     "Series-Name" vs "Series Name").
 
     Args:
-        author_dir: Sanitized author directory name
-        series_name: Original series name from metadata
-        destination_dir: Base destination directory
+        author_dir (str): Sanitized author directory name.
+        series_name (str): Original series name from metadata.
+        destination_dir (str): Base destination directory.
 
     Returns:
-        str: Existing folder name if found, otherwise sanitized series name
+        str: Existing folder name if found, otherwise sanitized series name.
     """
     if not series_name:
         return ""
