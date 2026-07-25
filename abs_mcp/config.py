@@ -281,7 +281,9 @@ def _build_config(
             str(Path(_r(source_dir, "SOURCE_AUDIO_BOOK_DIRECTORY")) / "libation.json"),
         ),
         "asins": asins or [],
-        "working_directory": _env("WORKING_DIRECTORY", "/tmp/monkeyplug-cleaning"),
+        "working_directory": _env(
+            "WORKING_DIRECTORY", str(Path.home() / ".cache" / "monkeyplug-cleaning")
+        ),
         "save_transcripts": _env("SAVE_TRANSCRIPTS", "true").lower() == "true",
         "swears_file": _env("SWEARS_FILE", ""),
         "remote_whisper_url": _env("REMOTE_WHISPER_URL", ""),

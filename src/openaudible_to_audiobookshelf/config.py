@@ -193,8 +193,12 @@ def _get_parser() -> argparse.ArgumentParser:
         "--working-directory",
         dest="working_directory",
         type=str,
-        default="/tmp/monkeyplug-cleaning",
-        help="Working directory for profanity cleaning processing (default: /tmp/monkeyplug-cleaning)",
+        default=str(Path.home() / ".cache" / "monkeyplug-cleaning"),
+        help=(
+            "Working directory for profanity cleaning processing. Default is "
+            "~/.cache/monkeyplug-cleaning so resume state survives reboots. "
+            "Avoid /tmp — it's volatile and breaks crash-resume."
+        ),
     )
 
     parser.add_argument(
