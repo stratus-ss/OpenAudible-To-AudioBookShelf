@@ -42,6 +42,13 @@ check: install-dev
 	@echo "🔎 Checking code formatting with black and isort ($(LINE_LENGTH) char line length)..."
 	$(BLACK_CMD) --check $(SOURCE_DIR) $(TESTS_DIR) *.py
 	$(ISORT_CMD) --check-only $(SOURCE_DIR) $(TESTS_DIR) *.py
+
+# Check for personal-infrastructure leaks in skills/docs/source
+# (Run before pushing — also runs automatically as a pre-commit hook.)
+lint-infra-leaks:
+	@echo "🔒 Scanning for personal-infrastructure leaks..."
+	@python3 scripts/check-infra-leaks.py --staged
+	@echo "✅ No personal-infrastructure leaks detected"
 	@echo "✅ Code formatting check passed"
 
 # Type check with mypy

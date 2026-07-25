@@ -1,0 +1,23 @@
+# Pre-commit hooks for the audiobook ingestion pipeline.
+# See https://pre-commit.com for installation.
+#
+# Install:  pre-commit install
+# Manual run (all files):  pre-commit run --all-files
+# Manual run (staged only):  pre-commit run
+#
+# The hook runs scripts/check-infra-leaks.py — a personal-infrastructure leak
+# detector that blocks `*.x86experts.com` and library_id UUIDs from being
+# committed to skills, docs, and source files.
+
+repos:
+  - repo: local
+    hooks:
+      - id: no-personal-infra-leaks
+        name: No personal infrastructure leaks
+        entry: python3 scripts/check-infra-leaks.py --allow-inline
+        language: system
+        types: [text]
+        # Apply to skills, docs, source code, and config files
+        files: '\.(md|mdc|py|sh|yaml|yml|json|toml|cfg|ini|txt|example)$'
+        # pre-commit passes staged file paths as positional args
+        require_serial: false

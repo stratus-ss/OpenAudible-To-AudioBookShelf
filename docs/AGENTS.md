@@ -71,6 +71,18 @@ Agents may:
 - **Never** run mass file deletion without explicit user confirmation
 - **Never** assume shared filesystem is writable -- verify before file operations
 - **Never** use OpenAudible for MCP workflows -- MCP requires Libation's CLI
+- **Never** hardcode personal infrastructure in skills, docs, or source code -- this includes:
+  - `*.x86experts.com` and `*.x86innovations.com` hostnames
+  - RFC 1918 private IPs (`192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`)
+  - AudioBookShelf library UUIDs outside of `libraries.yaml` / `.env` config files
+  - Per-user filesystem paths like `/home/<user>/...`
+
+  Use one of:
+  - `${ENV_VAR}` substitution (e.g., `${REMOTE_WHISPER_URL}`)
+  - `<placeholder-name>` syntax (e.g., `<whisper-backend-url>`)
+  - Generic role names (e.g., "the Whisper backend" instead of an actual hostname)
+
+  This is enforced by `scripts/check-infra-leaks.py` (runs as a pre-commit hook and via `make lint-infra-leaks`). If you must commit a leak (e.g., it's a legitimate config example in `libraries.yaml`), add a comment on the line above: `# allow-infra-leak: <reason>`.
 
 ## MCP Usage
 
