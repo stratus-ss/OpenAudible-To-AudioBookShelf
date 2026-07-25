@@ -18,12 +18,9 @@ Responses (stdout, one JSON object per line):
 """
 import asyncio
 import json
-import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from mcp_server import mcp
+from .mcp_server import mcp
 
 
 async def _handle(line: str) -> dict:
