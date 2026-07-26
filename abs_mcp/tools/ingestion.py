@@ -645,12 +645,16 @@ def get_cleaning_progress() -> dict:
             "stage": str,            # staging|uploading|transcribing|done|failed|skipped
             "books_done": int,       # books completed so far
             "books_total": int,      # total books in the batch
+            "chunk_done": int,       # chunks transcribed (only when stage=transcribing, >150MB files)
+            "chunk_total": int,      # total chunks for the book
             "profanities": int,      # count if status=done
             "error": str             # if status=failed
         }
 
     ETA hint: derive as (elapsed_sec / books_done) * (books_total - books_done).
-    If books_done == 0, ETA is null. The MCP server does not compute ETA —
+    If books_done == 0, ETA is null. When chunk_total > 0, prefer
+    chunk-level ETA: (elapsed_sec / chunk_done) * (chunk_total - chunk_done)
+    for much finer granularity. The MCP server does not compute ETA —
     calling agents should track wall-clock time externally.
 
     Note: This tool is callable concurrently while organize_books or

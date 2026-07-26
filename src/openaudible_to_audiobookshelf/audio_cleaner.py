@@ -11,6 +11,8 @@ import os
 import shutil
 import socket
 import subprocess
+import threading
+import time
 import urllib.parse
 from datetime import datetime
 from pathlib import Path
@@ -356,7 +358,49 @@ class AudioCleaner:
                 stage="transcribing", books_done=self.total_processed, books_total=self._book_count,
             )
 
+            # Per-chunk progress monitoring. MonkeyPlug processes chunks
+            # sequentially; a background thread counts transcript JSONs as
+            # they land, giving the agent live "3 of 9 chunks done" updates
+            # via get_cleaning_progress() without polling overhead.
+            chunk_monitor = None
+            if file_size_mb > self.CHUNKING_THRESHOLD_MB:
+                chunk_dir = Path(paths["working_dir"]) / "chunks"
+                _stop = threading.Event()
+                _done = 0
+                _total = 0
+
+                def _watch():
+                    nonlocal _done, _total
+                    while not _stop.is_set():
+                        if chunk_dir.exists():
+                            all_files = list(chunk_dir.glob("*_chunk_*.*"))
+                            audio = [f for f in all_files
+                                     if not f.name.endswith("_transcript.json")
+                                     and f.suffix.lower() != ".json"]
+                            if _total == 0 and audio:
+                                _total = len(audio)
+                            transcripts = [f for f in all_files
+                                          if f.name.endswith("_transcript.json")]
+                            current = len(transcripts)
+                            if current > _done and _total > 0:
+                                _done = current
+                                self._fire_progress(
+                                    asin=asin, book_title=book_title,
+                                    status="processing", stage="transcribing",
+                                    books_done=self.total_processed,
+                                    books_total=self._book_count,
+                                    chunk_done=_done, chunk_total=_total,
+                                )
+                        time.sleep(2)
+
+                chunk_monitor = threading.Thread(target=_watch, daemon=True)
+                chunk_monitor.start()
+
             cleaned_file = plugger.EncodeCleanAudio()
+
+            if chunk_monitor is not None:
+                _stop.set()
+                chunk_monitor.join(timeout=5)
             
             # Validate that a file path was returned
             if cleaned_file is None:

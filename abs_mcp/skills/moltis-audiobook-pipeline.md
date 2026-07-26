@@ -307,7 +307,19 @@ When `enable_profanity_cleaning=true`, the `result` dict includes:
 - `stage`: `staging` | `uploading` | `transcribing` | `resuming` | `done` | `failed` | `skipped` — the current per-book stage. `resuming` fires briefly when a re-run picks up partial chunks from a previous crash (see Resume state below).
 - `books_done`: integer, count of books that reached `done` stage
 - `books_total`: integer, total books in the current batch
+- `chunk_done`: integer, count of chunks that have completed transcription (present when `stage=transcribing` and the file is >150MB)
+- `chunk_total`: integer, total chunks this book was split into
 - Per-ASIN entries include the current `stage` for that book
+
+**Using chunk counters for ETA:** When `chunk_total > 0`, ETA is much finer than the book-level counter. Compute as:
+```
+elapsed_minutes = time since job_id was returned
+ETA_minutes = (elapsed_minutes / chunk_done) * (chunk_total - chunk_done)
+```
+Example: Heretical Fishing split into 9 chunks, 3 done at 63 min elapsed → `(63/3)*6 = 126 min remaining`. (The book-level counter would just say "0 of 1 done, ETA null.")
+
+The agent's reporting to the user should use chunk-level numbers when available:
+  "3 of 9 chunks done for Heretical Fishing (~2 hrs remaining)"
 
 ## Resume state (added 2026-07-25)
 
@@ -340,7 +352,7 @@ Per-book profanity cleaning state survives **MCP service restarts and VM reboots
 | 6 | `organize_books` | `library="target"` | Move into Author/Series/Title tree. |
 | 7 | `scan_audiobookshelf` | `library="target"` | ABS discovers new files. ~20s. |
 | 8 | `match_audiobookshelf` | `library="target"`, `days_ago=1` | Link to Audible metadata. |
-| 8.5 | `get_cleaning_progress` | -- | ONE-SHOT progress check for an in-flight cleaning job. Returns per-ASIN state + `stage` (staging\|uploading\|transcribing\|resuming\|done\|failed\|skipped), `books_done`, `books_total`. **Call only when the user asks for status — not in a polling loop.** Returns in 2–5ms. |
+| 8.5 | `get_cleaning_progress` | -- | ONE-SHOT progress check for an in-flight cleaning job. Returns per-ASIN state + `stage`, `books_done`, `books_total`, `chunk_done`, `chunk_total`. **Call only when the user asks for status — not in a polling loop.** Prefer chunk counters for ETA when available (see Progress fields). Returns in 2–5ms. |
 | 8.6 | `get_job_result` | `job_id="<id>"` | ONE-SHOT check for the final result of an async `organize_books` or `ingest_books` call. Returns `{"status": "completed", "result": {...}}` when done, `{"status": "running"}` while in progress, or `{"error": "Unknown job"}` if the server restarted mid-job. **Call only when the user asks for status — not in a polling loop.** Free. |
 | 9 | `delete_library_items` | `library=`, `item_ids=[...]`, **`cleanup_files=true`** | DB-only delete leaves the file on disk; ABS watcher (`disableWatcher=false`) resurrects the entry under a new UUID within seconds. |
 
