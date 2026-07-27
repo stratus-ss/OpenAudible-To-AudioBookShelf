@@ -319,19 +319,25 @@ class AudioCleaner:
                 self._mark_resume_status(asin, "in_progress", working_dir=book_wd)
 
             if self.config.remote_whisper_url:
-                try:
-                    parsed = urllib.parse.urlparse(self.config.remote_whisper_url)
-                    host = parsed.hostname
-                    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-                    if not host:
-                        raise AudioCleaningError(
-                            f"Whisper backend URL has no host: {self.config.remote_whisper_url}"
-                        )
-                    with socket.create_connection((host, port), timeout=5):
-                        pass
-                except (OSError, AudioCleaningError) as e:
+                parsed = urllib.parse.urlparse(self.config.remote_whisper_url)
+                host = parsed.hostname
+                port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                if not host:
                     raise AudioCleaningError(
-                        f"Whisper backend at {self.config.remote_whisper_url} is unreachable: {e}"
+                        f"Whisper backend URL has no host: {self.config.remote_whisper_url}"
+                    )
+                last_error = None
+                for attempt in range(12):
+                    try:
+                        with socket.create_connection((host, port), timeout=5):
+                            break
+                    except (OSError, socket.error) as e:
+                        last_error = e
+                        if attempt < 11:
+                            time.sleep(5)
+                else:
+                    raise AudioCleaningError(
+                        f"Whisper backend at {self.config.remote_whisper_url} is unreachable after 12 attempts: {last_error}"
                     )
 
             paths = self._setup_output_paths(source_file, book_data)

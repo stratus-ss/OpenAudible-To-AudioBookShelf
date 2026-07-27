@@ -287,6 +287,7 @@ def _build_config(
         "save_transcripts": _env("SAVE_TRANSCRIPTS", "true").lower() == "true",
         "swears_file": _env("SWEARS_FILE", ""),
         "remote_whisper_url": _env("REMOTE_WHISPER_URL", ""),
+        "whisper_model": _env("WHISPER_MODEL", "small"),
         "timeout": int(_env("TIMEOUT", "600")),
         "confidence_threshold": float(_env("CONFIDENCE_THRESHOLD", "0.70")),
         "beep_mode": _env("BEEP_MODE", "false").lower() == "true",
