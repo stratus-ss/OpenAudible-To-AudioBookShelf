@@ -304,7 +304,7 @@ def move_audio_book_files(
     total_in_source = len(books)
     skipped_reasons: dict[str, str] = {}
     if audio_cleaner:
-        audio_cleaner.set_book_count(total_in_source)
+        audio_cleaner.set_book_count(len(asins) if asins else total_in_source)
     for book in books:
         try:
             if download_program == "OpenAudible":
@@ -358,8 +358,6 @@ def move_audio_book_files(
                 target_audio_file_path, downloaded_audio_file_path, book_data, log_file
             ):
                 continue
-            books_to_process_in_audio_bookself.append(book_data)
-
             # Clean audio file if profanity cleaning is enabled
             file_to_process = _clean_audio_if_enabled(
                 audio_cleaner, downloaded_audio_file_path, book_data, _tracking
@@ -374,6 +372,7 @@ def move_audio_book_files(
                 else:
                     shutil.move(file_to_process, audio_book_destination_dir)
                     action = "moved"
+                books_to_process_in_audio_bookself.append(book_data)
                 log_file.write(
                     f"{datetime.now()} - INFO - Processed and {action} files for book: {book_data['title']} under \
                         '{author_dir}/{series_dir}'\n"
