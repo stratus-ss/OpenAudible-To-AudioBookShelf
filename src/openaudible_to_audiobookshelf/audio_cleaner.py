@@ -370,16 +370,27 @@ class AudioCleaner:
             # via get_cleaning_progress() without polling overhead.
             chunk_monitor = None
             if file_size_mb > self.CHUNKING_THRESHOLD_MB:
-                chunk_dir = Path(paths["working_dir"]) / "chunks"
+                # MonkeyPlug creates <working_dir>/<input_filename>/chunks/
+                # so we search for the chunks/ subdir dynamically.
+                _wd = Path(paths["working_dir"])
                 _stop = threading.Event()
                 _done = 0
                 _total = 0
+                _chunk_dir_resolved = None
+
+                def _find_chunk_dir():
+                    for d in _wd.rglob("chunks"):
+                        if d.is_dir():
+                            return d
+                    return None
 
                 def _watch():
-                    nonlocal _done, _total
+                    nonlocal _done, _total, _chunk_dir_resolved
                     while not _stop.is_set():
-                        if chunk_dir.exists():
-                            all_files = list(chunk_dir.glob("*_chunk_*.*"))
+                        if _chunk_dir_resolved is None:
+                            _chunk_dir_resolved = _find_chunk_dir()
+                        if _chunk_dir_resolved and _chunk_dir_resolved.exists():
+                            all_files = list(_chunk_dir_resolved.glob("*_chunk_*.*"))
                             audio = [f for f in all_files
                                      if not f.name.endswith("_transcript.json")
                                      and f.suffix.lower() != ".json"]
@@ -582,11 +593,6 @@ class AudioCleaner:
                 "parallelEncoding": getattr(self.config, "parallel_encoding", True),
                 "maxWorkers": getattr(self.config, "max_workers", None),
                 "verbose": getattr(self.config, "debug", False),
-                "remoteParams": {
-                    "is_diarize": "false",
-                    "vad_filter": "false",
-                    "lang": "en",
-                },
             }
             
             # Log and print MonkeyPlug parameters if debug enabled
