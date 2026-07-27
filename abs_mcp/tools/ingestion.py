@@ -212,6 +212,7 @@ def _sync_organize_books(
     libation_folder_cleanup: bool | None,
     libation_file_locations_path: str | None,
     enable_profanity_cleaning: bool | None,
+    asins: list[str] | None,
 ) -> dict:
     """Synchronous organize_books implementation — runs in thread pool via asyncio.to_thread."""
     _tool_start = time.monotonic()
@@ -249,13 +250,17 @@ def _sync_organize_books(
             )
             cfg.audio_file_extension = detected
 
-    # Resolve which ASINs to organize: prefer the in-memory handoff from the
-    # most recent download_books call; fall back to scanning the source
-    # directory for audiobook files (catches process-restart edge case).
+    # Resolve which ASINs to organize: explicit asins= param takes priority,
+    # then the in-memory handoff from the most recent download_books call,
+    # then fall back to scanning the source directory.
     global _last_downloaded_asins
-    download_asins = _last_downloaded_asins
-    _last_downloaded_asins = []
-    if not download_asins:
+    if asins is not None:
+        download_asins = asins
+        _last_downloaded_asins = []  # clear stale handoff
+    elif _last_downloaded_asins:
+        download_asins = _last_downloaded_asins
+        _last_downloaded_asins = []
+    else:
         download_asins = _extract_asins_from_dir(cfg.source_audio_book_directory)
 
     result = step_organize(cfg, asins=download_asins if download_asins else None)
@@ -280,6 +285,7 @@ async def organize_books(
     libation_folder_cleanup: bool | None = None,
     libation_file_locations_path: str | None = None,
     enable_profanity_cleaning: bool | None = None,
+    asins: list[str] | None = None,
 ) -> dict:
     """Organize downloaded audiobooks into the ABS directory structure.
 
@@ -311,6 +317,12 @@ async def organize_books(
         libation_folder_cleanup: Delete Libation source folders after move (default: from .env).
         libation_file_locations_path: Path to Libation FileLocationsV2.json (default: from .env).
         enable_profanity_cleaning: Enable monkeyplug profanity filtering (default: from .env).
+        asins: Specific ASINs to organize (e.g. ["B0CVCYB19Y"]). When provided, only
+            these books are processed — no other books are touched. If omitted,
+            falls back to the ASINs from the most recent download_books call, then
+            to scanning all files in the source directory. Always pass asins=
+            explicitly when targeting specific books; do not rely on the implicit
+            download_books → organize_books handoff.
 
         Note: When enable_profanity_cleaning=True, expect ~8 min per hour
         of audio content (empirically measured: 8.13 min/hour benchmark,
@@ -346,7 +358,7 @@ async def organize_books(
             _sync_organize_books,
             purchased_how_long_ago, library, source_dir, destination_dir,
             audio_file_extension, copy_instead_of_move, libation_folder_cleanup,
-            libation_file_locations_path, enable_profanity_cleaning,
+            libation_file_locations_path, enable_profanity_cleaning, asins,
         )
         _active_job["result"] = result
 
