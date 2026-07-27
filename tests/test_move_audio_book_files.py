@@ -4,7 +4,6 @@ import json
 import os
 import sys
 import tempfile
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -813,13 +812,19 @@ class TestProfanityCleaningUx:
         Path(path).write_text("anal\n")
         return path
 
-    def test_fail_fast_backend_unreachable(self, tmp_path):
-        """AudioCleaner with unreachable Whisper URL raises AudioCleaningError in <10s.
+    def test_retry_backend_unreachable(self, tmp_path, monkeypatch):
+        """AudioCleaner with persistently unreachable Whisper URL eventually raises AudioCleaningError.
 
-        Verifies Task 1c + DR-1: fail-fast backend check raises AudioCleaningError,
-        total_failed is incremented, caller (move_audio_book_files) must catch.
+        The cleaner now retries the backend connect (12 attempts x 5s ≈ 60s) to ride
+        out transient unavailability (e.g. whisper container still starting). After
+        exhausting retries it raises AudioCleaningError; total_failed is incremented,
+        caller (move_audio_book_files) must catch.
         """
         from openaudible_to_audiobookshelf.audio_cleaner import AudioCleaner, AudioCleaningError
+
+        # Avoid waiting the full retry budget — collapse the per-attempt sleep to 0
+        # so the test only verifies the retry-then-fail semantics, not the wall clock.
+        monkeypatch.setattr("time.sleep", lambda _s: None)
 
         swears = self._write_swears()
         try:
@@ -831,16 +836,13 @@ class TestProfanityCleaningUx:
                 f.write(b"fakedata")
                 src = f.name
             try:
-                start = time.monotonic()
                 with pytest.raises(AudioCleaningError, match="unreachable"):
                     cleaner.process_audio_file(
                         src, {"title": "Fail Book", "asin": "B0FAIL"}
                     )
-                elapsed = time.monotonic() - start
             finally:
                 os.remove(src)
 
-            assert elapsed < 10, f"should fail fast (<10s); took {elapsed:.2f}s"
             assert cleaner.total_failed == 1
             assert cleaner.total_processed == 0
         finally:
